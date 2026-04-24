@@ -1,0 +1,37 @@
+# 媒体文件和生成的缓存
+static/thumbnails/
+static/converted/
+trash/
+extracted_photos/
+Photos Library.photoslibrary/
+
+# 数据库（用户自己的数据）
+photos.db
+photos.db-shm
+photos.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# 日志
+*.log

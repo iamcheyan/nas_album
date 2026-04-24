@@ -1,0 +1,899 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f0f0f;
+    color: #e0e0e0;
+    line-height: 1.6;
+    -webkit-tap-highlight-color: transparent;
+}
+
+header {
+    text-align: center;
+    padding: 40px 20px 20px;
+    background: linear-gradient(180deg, #1a1a2e 0%, #0f0f0f 100%);
+    position: relative;
+}
+
+header h1 {
+    font-size: 2rem;
+    font-weight: 300;
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+}
+
+header p {
+    color: #888;
+    font-size: 0.9rem;
+    margin-bottom: 15px;
+}
+
+.header-actions {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+/* 缩略图尺寸调节 */
+.thumb-size-control {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 8px 20px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 20px;
+    max-width: 300px;
+    margin: 0 auto;
+}
+
+.thumb-size-icon {
+    font-size: 0.9rem;
+    opacity: 0.6;
+}
+
+.thumb-size-control input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 150px;
+    height: 4px;
+    background: #333;
+    border-radius: 2px;
+    outline: none;
+}
+
+.thumb-size-control input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: #3498db;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.thumb-size-control input[type="range"]::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+}
+
+.thumb-size-control input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: #3498db;
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+}
+
+#thumb-size-value {
+    font-size: 0.8rem;
+    color: #888;
+    min-width: 50px;
+    text-align: left;
+}
+
+/* 按钮 */
+.btn {
+    padding: 8px 20px;
+    border: none;
+    border-radius: 20px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.btn-secondary {
+    background: #333;
+    color: #ccc;
+}
+
+.btn-secondary:hover {
+    background: #444;
+}
+
+.btn-danger {
+    background: #c0392b;
+    color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+    background: #e74c3c;
+}
+
+.btn-danger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background: #3498db;
+    color: #fff;
+}
+
+.btn-primary:hover {
+    background: #5dade2;
+}
+
+/* 选择工具栏 */
+.selection-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: #1a1a2e;
+    padding: 12px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    z-index: 500;
+    transform: translateY(-100%);
+    transition: transform 0.3s;
+}
+
+.selection-bar.visible {
+    transform: translateY(0);
+}
+
+.selection-actions {
+    display: flex;
+    gap: 10px;
+}
+
+body.selection-mode {
+    padding-top: 50px;
+}
+
+body.selection-mode header {
+    padding-top: 60px;
+}
+
+/* 时间线容器 */
+#timeline {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+    position: relative;
+}
+
+#timeline::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: linear-gradient(180deg, transparent, #333, transparent);
+    transform: translateX(-50%);
+}
+
+/* 年份分组 */
+.year-group {
+    margin-bottom: 40px;
+    position: relative;
+}
+
+.year-label {
+    text-align: center;
+    font-size: 1.8rem;
+    font-weight: 200;
+    color: #555;
+    margin: 30px 0 20px;
+    position: relative;
+    z-index: 1;
+}
+
+.year-label span {
+    background: #0f0f0f;
+    padding: 0 20px;
+}
+
+.month-label {
+    text-align: center;
+    font-size: 1rem;
+    color: #666;
+    margin: 20px 0 15px;
+    position: relative;
+    z-index: 1;
+}
+
+.month-label span {
+    background: #0f0f0f;
+    padding: 0 15px;
+}
+
+/* 照片网格 */
+.photo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+.photo-item {
+    position: relative;
+    border-radius: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    background: #1a1a1a;
+    aspect-ratio: 1;
+    transition: transform 0.2s, box-shadow 0.2s;
+    -webkit-touch-callout: none;
+    user-select: none;
+}
+
+.photo-item:hover {
+    transform: scale(1.03);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    z-index: 10;
+}
+
+.photo-item:active {
+    transform: scale(0.97);
+}
+
+/* 选择模式样式 */
+body.selection-mode .photo-item {
+    cursor: pointer;
+}
+
+body.selection-mode .photo-item::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    border: 3px solid transparent;
+    border-radius: 8px;
+    transition: border-color 0.2s;
+    pointer-events: none;
+}
+
+.photo-item.selected::after {
+    border-color: #3498db !important;
+}
+
+.photo-checkbox {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.5);
+    border: 2px solid rgba(255,255,255,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: transparent;
+    z-index: 5;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+body.selection-mode .photo-checkbox {
+    opacity: 1;
+}
+
+.photo-item.selected .photo-checkbox {
+    background: #3498db;
+    border-color: #3498db;
+    color: #fff;
+    opacity: 1;
+}
+
+.photo-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    pointer-events: none;
+}
+
+.photo-item .photo-date {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 20px 8px 8px;
+    background: linear-gradient(transparent, rgba(0,0,0,0.7));
+    font-size: 0.75rem;
+    color: rgba(255,255,255,0.8);
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.photo-item:hover .photo-date {
+    opacity: 1;
+}
+
+/* 格式角标 */
+.format-badge {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    z-index: 5;
+    text-transform: uppercase;
+}
+
+.format-badge.image {
+    background: rgba(52, 152, 219, 0.85);
+    color: #fff;
+}
+
+.format-badge.video {
+    background: rgba(231, 76, 60, 0.85);
+    color: #fff;
+}
+
+/* 视频时长 */
+.video-duration {
+    position: absolute;
+    bottom: 30px;
+    right: 8px;
+    padding: 3px 8px;
+    background: rgba(0,0,0,0.7);
+    border-radius: 4px;
+    font-size: 0.75rem;
+    color: #fff;
+    z-index: 5;
+}
+
+/* 视频播放按钮 */
+.video-play-btn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 50px;
+    height: 50px;
+    background: rgba(0,0,0,0.6);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    color: #fff;
+    z-index: 4;
+    pointer-events: none;
+}
+
+/* 灯箱视频 */
+#lightbox-media-container video {
+    max-width: 90%;
+    max-height: 70vh;
+    border-radius: 4px;
+}
+
+/* 灯箱 */
+.lightbox {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.95);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    padding: 20px;
+    touch-action: pan-y pinch-zoom;
+}
+
+.lightbox.hidden {
+    display: none;
+}
+
+.lightbox img {
+    max-width: 90%;
+    max-height: 70vh;
+    object-fit: contain;
+    border-radius: 4px;
+}
+
+.lightbox .close {
+    position: absolute;
+    top: 15px;
+    right: 20px;
+    font-size: 2.5rem;
+    color: #fff;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+    padding: 10px;
+    z-index: 1001;
+}
+
+.lightbox .close:hover {
+    opacity: 1;
+}
+
+.lightbox-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 2rem;
+    color: #fff;
+    opacity: 0.5;
+    cursor: pointer;
+    padding: 20px 15px;
+    transition: opacity 0.2s;
+    z-index: 1001;
+    display: none;
+}
+
+.lightbox-nav:hover {
+    opacity: 0.9;
+}
+
+.lightbox-nav.prev {
+    left: 5px;
+}
+
+.lightbox-nav.next {
+    right: 5px;
+}
+
+.lightbox-info {
+    margin-top: 15px;
+    text-align: center;
+    color: #aaa;
+    font-size: 0.9rem;
+}
+
+.lightbox-info span {
+    margin: 0 10px;
+}
+
+.lightbox-path {
+    margin-top: 8px;
+    text-align: center;
+    color: #666;
+    font-size: 0.75rem;
+    max-width: 80%;
+    word-break: break-all;
+    font-family: monospace;
+}
+
+.lightbox-actions {
+    margin-top: 15px;
+}
+
+/* 加载提示 */
+.loading {
+    text-align: center;
+    padding: 40px;
+    color: #666;
+    display: none;
+}
+
+.loading.visible {
+    display: block;
+}
+
+/* ========== 自定义对话框 ========== */
+.custom-dialog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 2000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.custom-dialog.hidden {
+    display: none;
+}
+
+.dialog-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0,0,0,0.7);
+    backdrop-filter: blur(4px);
+}
+
+.dialog-box {
+    position: relative;
+    background: #1a1a2e;
+    border-radius: 16px;
+    padding: 30px;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    animation: dialogIn 0.3s ease;
+}
+
+@keyframes dialogIn {
+    from {
+        opacity: 0;
+        transform: scale(0.9) translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.dialog-icon {
+    font-size: 3rem;
+    margin-bottom: 15px;
+}
+
+.dialog-title {
+    font-size: 1.3rem;
+    font-weight: 500;
+    margin-bottom: 12px;
+    color: #fff;
+}
+
+.dialog-message {
+    color: #aaa;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    margin-bottom: 25px;
+}
+
+.dialog-message code {
+    background: rgba(255,255,255,0.1);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    word-break: break-all;
+}
+
+.dialog-actions {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.dialog-actions .btn {
+    min-width: 100px;
+}
+
+/* ========== Toast ========== */
+.toast {
+    position: fixed;
+    bottom: 40px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1a1a2e;
+    color: #fff;
+    padding: 12px 24px;
+    border-radius: 30px;
+    font-size: 0.9rem;
+    z-index: 2001;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    animation: toastIn 0.3s ease;
+}
+
+.toast.hidden {
+    display: none;
+}
+
+@keyframes toastIn {
+    from {
+        opacity: 0;
+        transform: translateX(-50%) translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+}
+
+/* 拖选框 */
+.drag-selection-box {
+    position: fixed;
+    border: 2px dashed #3498db;
+    background: rgba(52, 152, 219, 0.1);
+    z-index: 400;
+    pointer-events: none;
+}
+
+.photo-item.drag-highlight {
+    box-shadow: 0 0 0 3px #3498db inset;
+}
+
+/* ==================== iPad ==================== */
+@media (max-width: 1024px) {
+    header {
+        padding: 30px 15px 15px;
+    }
+
+    header h1 {
+        font-size: 1.7rem;
+    }
+
+    #timeline {
+        padding: 15px;
+        max-width: 100%;
+    }
+
+    #timeline::before {
+        left: 30px;
+    }
+
+    .year-label {
+        font-size: 1.5rem;
+        margin: 25px 0 15px;
+        text-align: left;
+        padding-left: 50px;
+    }
+
+    .year-label span {
+        padding: 0 15px;
+    }
+
+    .month-label {
+        text-align: left;
+        padding-left: 50px;
+        margin: 15px 0 10px;
+    }
+
+    .month-label span {
+        padding: 0 10px;
+    }
+
+    .photo-grid {
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 6px;
+        padding-left: 50px;
+    }
+
+    .photo-item .photo-date {
+        opacity: 1;
+        font-size: 0.7rem;
+        padding: 15px 6px 6px;
+    }
+
+    .lightbox-nav {
+        display: block;
+    }
+
+    .thumb-size-control {
+        max-width: 260px;
+    }
+
+    .thumb-size-control input[type="range"] {
+        width: 120px;
+    }
+}
+
+/* ==================== 手机 ==================== */
+@media (max-width: 767px) {
+    header {
+        padding: 20px 10px 10px;
+    }
+
+    header h1 {
+        font-size: 1.3rem;
+        letter-spacing: 1px;
+    }
+
+    header p {
+        font-size: 0.8rem;
+    }
+
+    .btn {
+        padding: 6px 15px;
+        font-size: 0.85rem;
+    }
+
+    .selection-bar {
+        padding: 10px 15px;
+    }
+
+    #timeline {
+        padding: 10px;
+    }
+
+    #timeline::before {
+        left: 15px;
+        width: 1.5px;
+    }
+
+    .year-group {
+        margin-bottom: 25px;
+    }
+
+    .year-label {
+        font-size: 1.2rem;
+        margin: 20px 0 10px;
+        text-align: left;
+        padding-left: 35px;
+    }
+
+    .year-label span {
+        padding: 0 10px;
+    }
+
+    .month-label {
+        text-align: left;
+        padding-left: 35px;
+        margin: 10px 0 8px;
+        font-size: 0.9rem;
+    }
+
+    .month-label span {
+        padding: 0 8px;
+    }
+
+    .photo-grid {
+        grid-template-columns: repeat(3, 1fr);
+        gap: 4px;
+        padding-left: 35px;
+    }
+
+    .photo-item {
+        border-radius: 6px;
+    }
+
+    .photo-item .photo-date {
+        opacity: 1;
+        font-size: 0.6rem;
+        padding: 12px 4px 4px;
+    }
+
+    .photo-checkbox {
+        width: 20px;
+        height: 20px;
+        font-size: 12px;
+    }
+
+    .lightbox {
+        padding: 0;
+    }
+
+    .lightbox img {
+        max-width: 100%;
+        max-height: 65vh;
+        border-radius: 0;
+    }
+
+    .lightbox .close {
+        top: 10px;
+        right: 10px;
+        font-size: 2rem;
+        padding: 15px;
+        background: rgba(0,0,0,0.4);
+        border-radius: 50%;
+        width: 44px;
+        height: 44px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .lightbox-nav {
+        display: block;
+        font-size: 1.5rem;
+        padding: 30px 10px;
+    }
+
+    .lightbox-nav.prev {
+        left: 0;
+    }
+
+    .lightbox-nav.next {
+        right: 0;
+    }
+
+    .lightbox-info {
+        margin-top: 10px;
+        font-size: 0.8rem;
+        padding: 0 10px;
+    }
+
+    .lightbox-path {
+        font-size: 0.65rem;
+        max-width: 90%;
+    }
+
+    .lightbox-actions {
+        margin-top: 10px;
+    }
+
+    .loading {
+        padding: 30px;
+        font-size: 0.85rem;
+    }
+
+    .thumb-size-control {
+        max-width: 220px;
+        padding: 6px 12px;
+    }
+
+    .thumb-size-control input[type="range"] {
+        width: 100px;
+    }
+
+    .dialog-box {
+        padding: 24px 20px;
+    }
+
+    .dialog-icon {
+        font-size: 2.5rem;
+    }
+
+    .dialog-title {
+        font-size: 1.1rem;
+    }
+
+    .dialog-message {
+        font-size: 0.9rem;
+    }
+}
+
+/* ==================== 小屏手机 ==================== */
+@media (max-width: 380px) {
+    .photo-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 3px;
+    }
+
+    .year-label {
+        font-size: 1.1rem;
+    }
+
+    .month-label {
+        font-size: 0.85rem;
+    }
+}
+
+/* ==================== 横屏 ==================== */
+@media (max-height: 500px) and (orientation: landscape) {
+    header {
+        padding: 10px;
+    }
+
+    header h1 {
+        font-size: 1.1rem;
+    }
+
+    .lightbox img {
+        max-height: 60vh;
+    }
+}

@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>照片时间线</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <header>
+        <h1>📷 照片时间线</h1>
+        <p id="stats">加载中...</p>
+        <div class="header-actions">
+            <button id="select-mode-btn" class="btn btn-secondary">选择</button>
+            <a href="/trash" class="btn btn-secondary">回收站</a>
+        </div>
+        <!-- 缩略图尺寸调节 -->
+        <div class="thumb-size-control">
+            <span class="thumb-size-icon">🔍</span>
+            <input type="range" id="thumb-size-slider" min="80" max="400" value="200" step="10">
+            <span id="thumb-size-value">200px</span>
+        </div>
+    </header>
+
+    <!-- 批量选择工具栏 -->
+    <div id="selection-bar" class="selection-bar">
+        <span id="selection-count">已选择 0 张</span>
+        <div class="selection-actions">
+            <button id="batch-delete-btn" class="btn btn-danger" disabled>删除</button>
+            <button id="cancel-selection-btn" class="btn btn-secondary">取消</button>
+        </div>
+    </div>
+
+    <main id="timeline">
+        <!-- 照片将通过 JS 动态插入 -->
+    </main>
+
+    <div id="loading" class="loading">加载更多...</div>
+
+    <!-- 灯箱 -->
+    <div id="lightbox" class="lightbox hidden">
+        <span class="close">&times;</span>
+        <span class="lightbox-nav prev">&#8249;</span>
+        <span class="lightbox-nav next">&#8250;</span>
+        <div id="lightbox-media-container"></div>
+        <div class="lightbox-info">
+            <span id="lightbox-type"></span>
+            <span id="lightbox-index"></span>
+            <span id="lightbox-date"></span>
+            <span id="lightbox-size"></span>
+        </div>
+        <div class="lightbox-path" id="lightbox-path"></div>
+        <div class="lightbox-actions">
+            <button class="btn btn-danger" onclick="deleteCurrentPhoto()">🗑 删除 (Delete)</button>
+        </div>
+    </div>
+
+    <!-- 自定义对话框 -->
+    <div id="custom-dialog" class="custom-dialog hidden">
+        <div class="dialog-overlay"></div>
+        <div class="dialog-box">
+            <div class="dialog-icon" id="dialog-icon">⚠️</div>
+            <h3 class="dialog-title" id="dialog-title">提示</h3>
+            <p class="dialog-message" id="dialog-message"></p>
+            <div class="dialog-actions" id="dialog-actions">
+                <button class="btn btn-secondary" id="dialog-cancel">取消</button>
+                <button class="btn btn-danger" id="dialog-confirm">确定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast 提示 -->
+    <div id="toast" class="toast hidden">
+        <span id="toast-message"></span>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>回收站 - 照片时间线</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        .trash-header {
+            padding: 30px 20px;
+            text-align: center;
+        }
+        .trash-header h1 {
+            font-size: 1.8rem;
+            font-weight: 300;
+        }
+        .trash-header p {
+            color: #888;
+            margin-top: 10px;
+        }
+        .trash-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .trash-item {
+            background: #1a1a1a;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+        .trash-item img {
+            width: 100%;
+            aspect-ratio: 1;
+            object-fit: cover;
+        }
+        .trash-item-info {
+            padding: 12px;
+        }
+        .trash-item-info .filename {
+            font-size: 0.85rem;
+            color: #ccc;
+            word-break: break-all;
+            margin-bottom: 5px;
+        }
+        .trash-item-info .meta {
+            font-size: 0.75rem;
+            color: #666;
+        }
+        .trash-item-info .countdown {
+            color: #e74c3c;
+            font-size: 0.8rem;
+            margin-top: 5px;
+        }
+        .trash-actions {
+            display: flex;
+            gap: 8px;
+            padding: 0 12px 12px;
+        }
+        .trash-actions button {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-restore {
+            background: #27ae60;
+            color: #fff;
+        }
+        .btn-restore:hover {
+            background: #2ecc71;
+        }
+        .btn-perm-delete {
+            background: #c0392b;
+            color: #fff;
+        }
+        .btn-perm-delete:hover {
+            background: #e74c3c;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #555;
+        }
+        .back-link {
+            display: inline-block;
+            margin-top: 20px;
+            color: #3498db;
+            text-decoration: none;
+        }
+        @media (max-width: 767px) {
+            .trash-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+                padding: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="trash-header">
+        <h1>🗑 回收站</h1>
+        <p>删除的照片会在这里保留 30 天，之后自动永久删除</p>
+        <a href="/" class="back-link">← 返回相册</a>
+    </div>
+
+    <div id="trash-content">
+        <div class="loading visible">加载中...</div>
+    </div>
+
+    <script>
+        async function loadTrash() {
+            try {
+                const response = await fetch('/api/trash');
+                const items = await response.json();
+                
+                const container = document.getElementById('trash-content');
+                
+                if (items.length === 0) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <p>回收站是空的</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                const grid = document.createElement('div');
+                grid.className = 'trash-grid';
+                
+                items.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'trash-item';
+                    div.dataset.id = item.id;
+                    
+                    // 从原始路径推断缩略图URL
+                    const thumbUrl = `/thumbnail/${item.photo_id}`;
+                    
+                    div.innerHTML = `
+                        <img src="${thumbUrl}" alt="${item.filename}" loading="lazy" 
+                             onerror="this.style.display='none'">
+                        <div class="trash-item-info">
+                            <div class="filename">${item.filename}</div>
+                            <div class="meta">${new Date(item.deleted_at).toLocaleString('zh-CN')}</div>
+                            <div class="countdown">${item.days_remaining} 天后自动删除</div>
+                        </div>
+                        <div class="trash-actions">
+                            <button class="btn-restore" onclick="restorePhoto(${item.id})">恢复</button>
+                            <button class="btn-perm-delete" onclick="permanentDelete(${item.id})">永久删除</button>
+                        </div>
+                    `;
+                    
+                    grid.appendChild(div);
+                });
+                
+                container.innerHTML = '';
+                container.appendChild(grid);
+            } catch (err) {
+                console.error('加载失败:', err);
+            }
+        }
+        
+        async function restorePhoto(id) {
+            if (!confirm('确定要恢复这张照片吗？')) return;
+            
+            try {
+                const response = await fetch(`/api/trash/${id}/restore`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    document.querySelector(`.trash-item[data-id="${id}"]`).remove();
+                    // 检查是否为空
+                    if (document.querySelectorAll('.trash-item').length === 0) {
+                        loadTrash();
+                    }
+                }
+            } catch (err) {
+                alert('恢复失败');
+            }
+        }
+        
+        async function permanentDelete(id) {
+            if (!confirm('确定要永久删除这张照片吗？\n此操作不可恢复！')) return;
+            
+            try {
+                const response = await fetch(`/api/trash/${id}/permanent_delete`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    document.querySelector(`.trash-item[data-id="${id}"]`).remove();
+                    if (document.querySelectorAll('.trash-item').length === 0) {
+                        loadTrash();
+                    }
+                }
+            } catch (err) {
+                alert('删除失败');
+            }
+        }
+        
+        loadTrash();
+    </script>
+</body>
+</html>
