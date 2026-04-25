@@ -11,9 +11,15 @@ let selectedPhotos = new Set();
 let currentView = 'all';
 let currentTab = 'all';
 let currentYearFilter = null;
+let currentMonthFilter = null;
+let currentDayFilter = null;
 let searchQuery = '';
+let currentSourcePath = '';
+let currentAlbumId = null;
+let allAlbums = [];
 
 const PER_PAGE = 50;
+const SESSION_KEY = 'nas-album-session';
 
 // ========== 自定义对话框系统 ==========
 function showDialog(options) {
@@ -24,8 +30,8 @@ function showDialog(options) {
         const message = document.getElementById('dialog-message');
         const actions = document.getElementById('dialog-actions');
 
-        icon.textContent = options.icon || '⚠️';
-        title.textContent = options.title || '提示';
+        icon.innerHTML = options.icon || '<svg width=\"32\" height=\"32\"><use href=\"#icon-alert\"/></svg>';
+        title.textContent = options.title || t('dialog.tip');
         message.innerHTML = options.message || '';
 
         actions.innerHTML = '';
@@ -33,7 +39,7 @@ function showDialog(options) {
         if (options.type === 'confirm') {
             const cancel = document.createElement('button');
             cancel.className = 'btn btn-secondary';
-            cancel.textContent = options.cancelText || '取消';
+            cancel.textContent = options.cancelText || t('action.cancel');
             cancel.onclick = () => {
                 dialog.classList.add('hidden');
                 resolve(false);
@@ -41,7 +47,7 @@ function showDialog(options) {
 
             const confirm = document.createElement('button');
             confirm.className = options.confirmClass || 'btn btn-primary';
-            confirm.textContent = options.confirmText || '确定';
+            confirm.textContent = options.confirmText || t('action.confirm');
             confirm.onclick = () => {
                 dialog.classList.add('hidden');
                 resolve(true);
@@ -52,7 +58,7 @@ function showDialog(options) {
         } else {
             const confirm = document.createElement('button');
             confirm.className = 'btn btn-primary';
-            confirm.textContent = options.confirmText || '确定';
+            confirm.textContent = options.confirmText || t('action.confirm');
             confirm.onclick = () => {
                 dialog.classList.add('hidden');
                 resolve(true);
@@ -118,6 +124,9 @@ function initSidebar() {
             const view = item.dataset.view;
             switchView(view);
             document.querySelectorAll('.sidebar-item[data-view]').forEach(i => i.classList.remove('active'));
+            document.querySelectorAll('.timeline-month').forEach(i => i.classList.remove('active'));
+            document.querySelectorAll('.timeline-year').forEach(i => i.classList.remove('active'));
+            document.querySelectorAll('.timeline-day').forEach(i => i.classList.remove('active'));
             item.classList.add('active');
             if (window.innerWidth <= 767) {
                 sidebar.classList.remove('open');
@@ -129,24 +138,38 @@ function initSidebar() {
 
 function switchView(view) {
     currentView = view;
+    currentTab = 'all';
     currentYearFilter = null;
+    currentMonthFilter = null;
+    currentDayFilter = null;
+    currentSourcePath = '';
+    currentAlbumId = null;
+    searchQuery = '';
     resetPhotos();
 
     const titles = {
-        all: '全部照片',
-        photos: '照片',
-        videos: '视频',
-        favorites: '收藏',
-        recent: '最近添加',
-        trash: '最近删除'
+        all: t('title.allPhotos'),
+        photos: t('title.photos'),
+        videos: t('title.videos'),
+        favorites: t('title.favorites'),
+        recent: t('title.recent'),
+        trash: t('title.trash'),
+        hidden: t('title.hiddenPhotos')
     };
-    document.getElementById('view-title').textContent = titles[view] || '全部照片';
+    document.getElementById('view-title').textContent = titles[view] || t('title.allPhotos');
+
+    // Update top tabs to show "all" tab active
+    document.querySelectorAll('.top-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector('.top-tab[data-tab="all"]').classList.add('active');
 
     if (view === 'trash') {
         loadTrash();
+    } else if (view === 'hidden') {
+        loadHiddenPhotos();
     } else {
         loadPhotos();
     }
+    saveSession();
 }
 
 // ========== 顶部 Tab ==========
@@ -161,22 +184,140 @@ function initTopTabs() {
     });
 }
 
+let mapInstance = null;
+let mapMarkers = [];
+
+function initMap(savedState) {
+    const timeline = document.getElementById('timeline');
+    timeline.innerHTML = '<div id="map-container"></div>';
+
+    // Use saved map state if available, otherwise default world view
+    const defaultCenter = [20, 0];
+    const defaultZoom = 2;
+    const center = savedState ? [savedState.lat, savedState.lng] : defaultCenter;
+    const zoom = savedState ? savedState.zoom : defaultZoom;
+
+    const map = L.map('map-container', {
+        zoomControl: false
+    }).setView(center, zoom);
+
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+    const providerId = getMapProvider();
+    const layer = MAP_PROVIDERS[providerId] || MAP_PROVIDERS['osm'];
+    currentTileLayer = L.tileLayer(layer.url, {
+        attribution: layer.attribution,
+        subdomains: layer.subdomains,
+        maxZoom: layer.maxZoom
+    }).addTo(map);
+
+    // Listen for moveend/zoomend to save map state
+    map.on('moveend', saveSession);
+    map.on('zoomend', saveSession);
+
+    return map;
+}
+
+async function loadMapView(savedMapState) {
+    const timeline = document.getElementById('timeline');
+    const loading = document.getElementById('loading');
+    const viewHeader = document.querySelector('.view-header');
+
+    viewHeader.style.display = 'none';
+    loading.classList.remove('visible');
+
+    if (!mapInstance) {
+        mapInstance = initMap(savedMapState);
+    } else {
+        timeline.innerHTML = '<div id="map-container"></div>';
+        mapInstance.getContainer().remove();
+        mapInstance = initMap(savedMapState);
+    }
+
+    // Clear existing markers
+    mapMarkers = [];
+
+    try {
+        const response = await fetch('/api/map/photos?limit=5000');
+        const data = await response.json();
+        const photos = data.photos || [];
+
+        if (photos.length === 0) {
+            timeline.innerHTML = `
+                <div class="map-placeholder">
+                    <div class="placeholder-icon"><svg width="48" height="48"><use href="#icon-map"/></svg></div>
+                    <h2>${t('empty.noGps')}</h2>
+                    <p>${t('empty.noGpsDesc')}</p>
+                </div>
+            `;
+            updateStatus(0, 0);
+            return;
+        }
+
+        const bounds = L.latLngBounds();
+
+        photos.forEach(photo => {
+            if (photo.lat == null || photo.lon == null) return;
+            const lat = parseFloat(photo.lat);
+            const lng = parseFloat(photo.lon);
+            if (isNaN(lat) || isNaN(lng)) return;
+
+            const marker = L.marker([lat, lng]);
+            const dateStr = photo.date_taken ? formatDate(photo.date_taken).time : '';
+            const popupHtml = `
+                <div class="map-popup">
+                    <img src="${photo.thumbnail_url}" alt="${escapeHtml(photo.filename)}" class="map-popup-thumb" loading="lazy">
+                    <div class="map-popup-info">
+                        <div class="map-popup-date">${escapeHtml(dateStr)}</div>
+                        <div class="map-popup-name" title="${escapeHtml(photo.filename)}">${escapeHtml(photo.filename)}</div>
+                    </div>
+                </div>
+            `;
+            marker.bindPopup(popupHtml, {
+                className: 'dark-popup',
+                closeButton: false
+            });
+            marker.on('click', () => {
+                marker.openPopup();
+            });
+            marker.addTo(mapInstance);
+            mapMarkers.push(marker);
+            bounds.extend([lat, lng]);
+        });
+
+        // Only fit bounds if no saved map state (first time viewing map)
+        if (mapMarkers.length > 0 && !savedMapState) {
+            mapInstance.fitBounds(bounds, { padding: [40, 40], maxZoom: 16 });
+        }
+
+        updateStatus(mapMarkers.length, 0);
+    } catch (err) {
+        console.error(t('empty.mapLoadFailed') + ':', err);
+        timeline.innerHTML = `
+            <div class="map-placeholder">
+                <div class="placeholder-icon"><svg width="48" height="48"><use href="#icon-alert"/></svg></div>
+                <h2>${t('empty.mapLoadFailed')}</h2>
+                <p>${t('empty.mapLoadFailedDesc')}</p>
+            </div>
+        `;
+        updateStatus(0, 0);
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 function switchTab(tab) {
     const timeline = document.getElementById('timeline');
     const loading = document.getElementById('loading');
     const viewHeader = document.querySelector('.view-header');
 
     if (tab === 'map') {
-        timeline.innerHTML = `
-            <div class="map-placeholder">
-                <div class="placeholder-icon">🗺️</div>
-                <h2>地图视图</h2>
-                <p>根据照片的 GPS 信息在地图上展示拍摄位置。<br>（功能开发中）</p>
-            </div>
-        `;
-        loading.classList.remove('visible');
-        viewHeader.style.display = 'none';
-        updateStatus(0, 0);
+        loadMapView();
+        saveSession();
         return;
     }
 
@@ -184,6 +325,7 @@ function switchTab(tab) {
         loadDbInfo();
         loading.classList.remove('visible');
         viewHeader.style.display = 'none';
+        saveSession();
         return;
     }
 
@@ -191,12 +333,17 @@ function switchTab(tab) {
 
     if (tab === 'years') {
         loadYearsView();
+        saveSession();
         return;
     }
 
     // all tab
+    currentYearFilter = null;
+    currentMonthFilter = null;
+    currentDayFilter = null;
     resetPhotos();
     loadPhotos();
+    saveSession();
 }
 
 // ========== 年份视图 ==========
@@ -204,45 +351,60 @@ function loadYearsView() {
     const timeline = document.getElementById('timeline');
     const loading = document.getElementById('loading');
     const viewTitle = document.getElementById('view-title');
-    viewTitle.textContent = '按年份浏览';
+    viewTitle.textContent = t('title.browseByYear');
     loading.classList.remove('visible');
 
-    const yearMap = {};
-    allPhotos.forEach(p => {
-        const year = formatDate(p.date_taken).year;
-        if (!yearMap[year]) yearMap[year] = 0;
-        yearMap[year]++;
-    });
-
-    const years = Object.keys(yearMap).sort((a, b) => b - a);
+    // Use timelineData (full stats from /api/timeline) instead of allPhotos
+    const tree = timelineData || {};
+    const years = Object.keys(tree).sort((a, b) => b - a);
 
     if (years.length === 0) {
-        timeline.innerHTML = '<div style="text-align:center;padding:60px;color:#666">暂无照片</div>';
+        timeline.innerHTML = '<div style="text-align:center;padding:60px;color:var(--text-secondary)">' + t('empty.noPhotos') + '</div>';
         updateStatus(0, 0);
         return;
     }
+
+    // Calculate total items per year from timeline data
+    const yearMap = {};
+    let totalItems = 0;
+    years.forEach(year => {
+        let count = 0;
+        Object.values(tree[year]).forEach(monthDays => {
+            Object.values(monthDays).forEach(dayCount => {
+                count += dayCount;
+            });
+        });
+        yearMap[year] = count;
+        totalItems += count;
+    });
 
     let html = '<div class="years-view"><div class="years-grid">';
     years.forEach(year => {
         html += `
             <div class="year-card" data-year="${year}">
                 <div class="year-number">${year}</div>
-                <div class="year-count">${yearMap[year]} 个项目</div>
+                <div class="year-count">${t('status.items', yearMap[year])}</div>
             </div>
         `;
     });
     html += '</div></div>';
     timeline.innerHTML = html;
-    updateStatus(allPhotos.length, selectedPhotos.size);
+    updateStatus(totalItems, selectedPhotos.size);
 
     document.querySelectorAll('.year-card').forEach(card => {
         card.addEventListener('click', () => {
             const year = card.dataset.year;
+            currentView = 'year';
             currentYearFilter = parseInt(year);
+            currentMonthFilter = null;
+            currentDayFilter = null;
+            currentSourcePath = '';
+            currentAlbumId = null;
+            searchQuery = '';
             document.querySelectorAll('.top-tab').forEach(t => t.classList.remove('active'));
             document.querySelector('.top-tab[data-tab="all"]').classList.add('active');
             currentTab = 'all';
-            document.getElementById('view-title').textContent = `${year}年`;
+            document.getElementById('view-title').textContent = t('title.yearFilter', year);
             resetPhotos();
             loadPhotos();
         });
@@ -253,7 +415,7 @@ function loadYearsView() {
 async function loadDbInfo() {
     const timeline = document.getElementById('timeline');
     const viewTitle = document.getElementById('view-title');
-    viewTitle.textContent = '数据库信息';
+    viewTitle.textContent = t('title.dbInfo');
 
     try {
         const response = await fetch('/api/stats');
@@ -261,17 +423,17 @@ async function loadDbInfo() {
 
         timeline.innerHTML = `
             <div class="dbinfo-placeholder">
-                <div class="placeholder-icon">🗄️</div>
-                <h2>数据库统计</h2>
+                <div class="placeholder-icon"><svg width="48" height="48"><use href="#icon-database"/></svg></div>
+                <h2>${t('db.statsTitle')}</h2>
                 <table class="dbinfo-table">
-                    <tr><th>总项目数</th><td>${stats.total || 0}</td></tr>
-                    <tr><th>照片</th><td>${stats.photos || 0}</td></tr>
-                    <tr><th>视频</th><td>${stats.videos || 0}</td></tr>
-                    <tr><th>回收站</th><td>${stats.trash || 0}</td></tr>
-                    <tr><th>来源路径数</th><td>${stats.sources || 0}</td></tr>
-                    <tr><th>最早照片</th><td>${stats.oldest || '-'}</td></tr>
-                    <tr><th>最新照片</th><td>${stats.newest || '-'}</td></tr>
-                    <tr><th>数据库大小</th><td>${formatSize(stats.db_size || 0)}</td></tr>
+                    <tr><th>${t('db.total')}</th><td>${stats.total || 0}</td></tr>
+                    <tr><th>${t('db.photos')}</th><td>${stats.photos || 0}</td></tr>
+                    <tr><th>${t('db.videos')}</th><td>${stats.videos || 0}</td></tr>
+                    <tr><th>${t('db.trash')}</th><td>${stats.trash || 0}</td></tr>
+                    <tr><th>${t('db.sources')}</th><td>${stats.sources || 0}</td></tr>
+                    <tr><th>${t('db.oldest')}</th><td>${stats.oldest || '-'}</td></tr>
+                    <tr><th>${t('db.newest')}</th><td>${stats.newest || '-'}</td></tr>
+                    <tr><th>${t('db.dbSize')}</th><td>${formatSize(stats.db_size || 0)}</td></tr>
                 </table>
             </div>
         `;
@@ -279,9 +441,9 @@ async function loadDbInfo() {
     } catch (err) {
         timeline.innerHTML = `
             <div class="dbinfo-placeholder">
-                <div class="placeholder-icon">⚠️</div>
-                <h2>无法加载统计信息</h2>
-                <p>请检查服务器连接</p>
+                <div class="placeholder-icon"><svg width="48" height="48"><use href="#icon-alert"/></svg></div>
+                <h2>${t('empty.noStats')}</h2>
+                <p>${t('empty.noStatsDesc')}</p>
             </div>
         `;
     }
@@ -295,15 +457,21 @@ function initSearch() {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
             searchQuery = e.target.value.trim().toLowerCase();
+            currentYearFilter = null;
+            currentMonthFilter = null;
+            currentDayFilter = null;
+            currentSourcePath = '';
+            currentAlbumId = null;
+            resetPhotos();
             if (searchQuery) {
-                resetPhotos();
-                document.getElementById('view-title').textContent = `搜索: "${e.target.value}"`;
-                loadPhotos();
+                currentView = 'search';
+                document.getElementById('view-title').textContent = t('title.searchResults', e.target.value);
             } else {
-                resetPhotos();
-                document.getElementById('view-title').textContent = '全部照片';
-                loadPhotos();
+                currentView = 'all';
+                document.getElementById('view-title').textContent = t('title.allPhotos');
             }
+            loadPhotos();
+            saveSession();
         }, 300);
     });
 }
@@ -312,11 +480,12 @@ function initSearch() {
 function createPhotoElement(photo) {
     const div = document.createElement('div');
     div.className = 'photo-item';
+    if (photo.hidden) div.classList.add('hidden-photo');
     div.dataset.id = photo.id;
 
     const checkbox = document.createElement('div');
     checkbox.className = 'photo-checkbox';
-    checkbox.innerHTML = '✓';
+    checkbox.innerHTML = '<svg width="14" height="14"><use href="#icon-check"/></svg>';
     div.appendChild(checkbox);
 
     const badge = document.createElement('div');
@@ -327,16 +496,29 @@ function createPhotoElement(photo) {
     if (photo.media_type === 'video' && photo.duration) {
         const duration = document.createElement('div');
         duration.className = 'video-duration';
-        duration.innerHTML = `▶ ${photo.duration}`;
+        duration.innerHTML = `<svg width="10" height="10" style="vertical-align:-1px;margin-right:2px"><use href="#icon-play"/></svg>${photo.duration}`;
         div.appendChild(duration);
     }
 
     if (photo.media_type === 'video') {
         const playBtn = document.createElement('div');
         playBtn.className = 'video-play-btn';
-        playBtn.innerHTML = '▶';
+        playBtn.innerHTML = '<svg width="20" height="20"><use href="#icon-play"/></svg>';
         div.appendChild(playBtn);
     }
+
+    // Hide/Unhide button
+    const hideBtn = document.createElement('button');
+    hideBtn.className = 'photo-hide-btn';
+    hideBtn.innerHTML = photo.hidden
+        ? '<svg width="14" height="14"><use href="#icon-eye"/></svg>'
+        : '<svg width="14" height="14"><use href="#icon-eye-off"/></svg>';
+    hideBtn.title = photo.hidden ? t('action.unhide') : t('action.hide');
+    hideBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleHidePhoto(photo.id, photo.hidden);
+    });
+    div.appendChild(hideBtn);
 
     const img = document.createElement('img');
     img.src = photo.thumbnail_url;
@@ -404,9 +586,108 @@ function disableSelectionMode() {
     updateStatus(filteredPhotos.length, 0);
 }
 
+async function toggleHidePhoto(photoId, currentlyHidden) {
+    const action = currentlyHidden ? 'unhide' : 'hide';
+    const confirmed = await showDialog({
+        type: 'confirm',
+        title: currentlyHidden ? t('action.unhide') : t('action.hide'),
+        message: currentlyHidden ? t('dialog.unhideConfirm') : t('dialog.hideConfirm'),
+        confirmText: t('action.confirm'),
+        cancelText: t('action.cancel')
+    });
+    if (!confirmed) return;
+
+    try {
+        const response = await fetch(`/api/photo/${photoId}/hide`, { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showToast(data.hidden ? t('action.hide') : t('action.unhide'));
+            // Refresh current view
+            if (currentView === 'hidden') {
+                resetPhotos();
+                await loadHiddenPhotos();
+            } else {
+                // Remove from current view if hiding
+                if (!currentlyHidden && data.hidden) {
+                    const el = document.querySelector(`.photo-item[data-id="${photoId}"]`);
+                    if (el) {
+                        el.style.transition = 'opacity 0.3s ease';
+                        el.style.opacity = '0';
+                        setTimeout(() => el.remove(), 300);
+                    }
+                    allPhotos = allPhotos.filter(p => p.id !== photoId);
+                    filteredPhotos = filteredPhotos.filter(p => p.id !== photoId);
+                    updateStatus(filteredPhotos.length, 0);
+                }
+            }
+            // Refresh stats
+            loadStats();
+        } else {
+            showToast(currentlyHidden ? t('dialog.unhideFailed') : t('dialog.hideFailed'));
+        }
+    } catch (err) {
+        console.error('Toggle hide failed:', err);
+        showToast(currentlyHidden ? t('dialog.unhideFailed') : t('dialog.hideFailed'));
+    }
+}
+
+async function loadHiddenPhotos() {
+    const timeline = document.getElementById('timeline');
+    const loading = document.getElementById('loading');
+    const viewHeader = document.querySelector('.view-header');
+
+    viewHeader.style.display = '';
+    document.getElementById('view-title').textContent = t('title.hiddenPhotos');
+
+    if (isLoading) return;
+    isLoading = true;
+    loading.classList.add('visible');
+
+    try {
+        const response = await fetch('/api/photos/hidden');
+        const data = await response.json();
+        const photos = data.photos || [];
+
+        if (photos.length === 0 && currentPage === 1) {
+            timeline.innerHTML = `
+                <div class="empty-state">
+                    <div class="placeholder-icon"><svg width="48" height="48"><use href="#icon-eye-off"/></svg></div>
+                    <h2>${t('empty.hiddenEmpty')}</h2>
+                </div>
+            `;
+            updateStatus(0, 0);
+            loading.classList.remove('visible');
+            isLoading = false;
+            hasMore = false;
+            return;
+        }
+
+        if (currentPage === 1) timeline.innerHTML = '';
+
+        const grid = document.createElement('div');
+        grid.className = 'photo-grid';
+        grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`;
+
+        photos.forEach(photo => {
+            grid.appendChild(createPhotoElement(photo));
+        });
+
+        timeline.appendChild(grid);
+        allPhotos = photos;
+        filteredPhotos = photos;
+        updateStatus(photos.length, 0);
+        hasMore = false;
+    } catch (err) {
+        console.error('Failed to load hidden photos:', err);
+    } finally {
+        loading.classList.remove('visible');
+        isLoading = false;
+    }
+}
+
 function updateSelectionUI() {
     const count = selectedPhotos.size;
-    document.getElementById('selection-count').textContent = `已选择 ${count} 张`;
+    document.getElementById('selection-count').textContent = t('status.selectedCount', count);
     document.getElementById('batch-delete-btn').disabled = count === 0;
     updateStatus(filteredPhotos.length, count);
 }
@@ -416,12 +697,12 @@ async function batchDelete() {
 
     const confirmed = await showDialog({
         type: 'confirm',
-        icon: '🗑️',
-        title: '确认删除',
-        message: `确定要删除选中的 <strong>${selectedPhotos.size}</strong> 个文件吗？<br><br>删除后可在回收站中恢复（保留30天）。`,
-        confirmText: '删除',
+        icon: '<svg width=\"32\" height=\"32\"><use href=\"#icon-trash\"/></svg>',
+        title: t('dialog.confirmDeleteTitle'),
+        message: t('dialog.confirmDeleteMsg', selectedPhotos.size),
+        confirmText: t('action.delete'),
         confirmClass: 'btn btn-danger',
-        cancelText: '取消'
+        cancelText: t('action.cancel')
     });
 
     if (!confirmed) return;
@@ -435,19 +716,29 @@ async function batchDelete() {
 
         const data = await response.json();
         if (data.success) {
-            selectedPhotos.forEach(id => {
+            const deletedSet = new Set(data.deleted);
+            deletedSet.forEach(id => {
                 const el = document.querySelector(`.photo-item[data-id="${id}"]`);
                 if (el) el.remove();
             });
-            allPhotos = allPhotos.filter(p => !selectedPhotos.has(p.id));
-            filteredPhotos = filteredPhotos.filter(p => !selectedPhotos.has(p.id));
+            
+            allPhotos = allPhotos.filter(p => !deletedSet.has(p.id));
+            filteredPhotos = filteredPhotos.filter(p => !deletedSet.has(p.id));
+            
             disableSelectionMode();
-            showToast(`成功删除 ${data.deleted_count} 个文件`);
+            
+            if (data.failed && data.failed.length > 0) {
+                showToast(t('dialog.deletePartial', data.deleted_count, data.failed.length));
+            } else {
+                showToast(t('dialog.deleteSuccess', data.deleted_count));
+            }
             loadStats();
+        } else {
+            showToast(data.error || t('dialog.batchDeleteFailed'));
         }
     } catch (err) {
-        console.error('批量删除失败:', err);
-        showToast('删除失败');
+        console.error(t('dialog.batchDeleteFailed') + ':', err);
+        showToast(t('dialog.batchDeleteFailed') + ': ' + err.message);
     }
 }
 
@@ -457,7 +748,7 @@ function formatDate(dateStr) {
         year: date.getFullYear(),
         month: date.getMonth() + 1,
         day: date.getDate(),
-        time: date.toLocaleString('zh-CN', {
+        time: date.toLocaleString(currentLang === 'zh' ? 'zh-CN' : currentLang === 'ja' ? 'ja-JP' : 'en-US', {
             year: 'numeric',
             month: '2-digit',
             day: '2-digit',
@@ -478,9 +769,13 @@ function renderPhotos(photos) {
     const timeline = document.getElementById('timeline');
 
     photos.forEach(photo => {
-        const { year, month } = formatDate(photo.date_taken);
+        if (document.querySelector(`.photo-item[data-id="${photo.id}"]`)) {
+            return;
+        }
+        const { year, month, day } = formatDate(photo.date_taken);
         const yearKey = `year-${year}`;
         const monthKey = `month-${year}-${month}`;
+        const dayKey = `day-${year}-${month}-${day}`;
 
         let yearGroup = document.getElementById(yearKey);
         if (!yearGroup) {
@@ -490,28 +785,42 @@ function renderPhotos(photos) {
 
             const yearLabel = document.createElement('div');
             yearLabel.className = 'year-label';
-            yearLabel.textContent = `${year}年`;
+            yearLabel.textContent = t('date.year', year);
             yearGroup.appendChild(yearLabel);
 
             insertYearGroup(timeline, yearGroup, year);
         }
 
-        let monthGrid = document.getElementById(monthKey);
-        if (!monthGrid) {
+        let monthGroup = document.getElementById(monthKey);
+        if (!monthGroup) {
             const monthLabel = document.createElement('div');
             monthLabel.className = 'month-label';
-            monthLabel.textContent = `${month}月`;
+            monthLabel.textContent = t('date.month', month);
 
-            monthGrid = document.createElement('div');
-            monthGrid.id = monthKey;
-            monthGrid.className = 'photo-grid';
-            monthGrid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`;
+            monthGroup = document.createElement('div');
+            monthGroup.id = monthKey;
+            monthGroup.className = 'month-group';
 
             yearGroup.appendChild(monthLabel);
-            yearGroup.appendChild(monthGrid);
+            yearGroup.appendChild(monthGroup);
         }
 
-        monthGrid.appendChild(createPhotoElement(photo));
+        let dayGrid = document.getElementById(dayKey);
+        if (!dayGrid) {
+            const dayLabel = document.createElement('div');
+            dayLabel.className = 'day-label';
+            dayLabel.textContent = t('date.monthDay', month, day);
+
+            dayGrid = document.createElement('div');
+            dayGrid.id = dayKey;
+            dayGrid.className = 'photo-grid';
+            dayGrid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`;
+
+            monthGroup.appendChild(dayLabel);
+            monthGroup.appendChild(dayGrid);
+        }
+
+        dayGrid.appendChild(createPhotoElement(photo));
     });
 }
 
@@ -552,6 +861,14 @@ function getFilteredPhotos() {
         photos = photos.filter(p => formatDate(p.date_taken).year === currentYearFilter);
     }
 
+    if (currentMonthFilter) {
+        photos = photos.filter(p => formatDate(p.date_taken).month === currentMonthFilter);
+    }
+
+    if (currentDayFilter) {
+        photos = photos.filter(p => formatDate(p.date_taken).day === currentDayFilter);
+    }
+
     if (searchQuery) {
         photos = photos.filter(p =>
             p.filename.toLowerCase().includes(searchQuery) ||
@@ -566,7 +883,182 @@ function resetPhotos() {
     currentPage = 1;
     hasMore = true;
     filteredPhotos = [];
+    allPhotos = [];
+    currentDayFilter = null;
     document.getElementById('timeline').innerHTML = '';
+}
+
+// 全局时间轴数据，从服务器一次性加载
+let timelineData = null;
+
+// ========== 时间轴侧边栏 ==========
+async function loadTimelineData() {
+    // 从服务器加载完整的时间轴统计数据
+    try {
+        const response = await fetch('/api/timeline');
+        const data = await response.json();
+        timelineData = data.timeline || {};
+        buildTimelineSidebar();
+    } catch (err) {
+        console.error(t('empty.noStats') + ':', err);
+    }
+}
+
+function buildTimelineSidebar() {
+    const list = document.getElementById('timeline-list');
+    if (!list) return;
+
+    // 优先使用从服务器加载的完整时间轴数据
+    const tree = timelineData || {};
+
+    // 如果没有服务器数据，回退到已加载的照片数据
+    if (Object.keys(tree).length === 0) {
+        allPhotos.forEach(p => {
+            const { year, month, day } = formatDate(p.date_taken);
+            if (!tree[year]) tree[year] = {};
+            if (!tree[year][month]) tree[year][month] = {};
+            if (!tree[year][month][day]) tree[year][month][day] = 0;
+            tree[year][month][day]++;
+        });
+    }
+
+    const years = Object.keys(tree).sort((a, b) => b - a);
+
+    if (years.length === 0) {
+        list.innerHTML = '<div style="padding:20px;color:#666;text-align:center;font-size:0.8rem">' + t('empty.noPhotos') + '</div>';
+        return;
+    }
+
+    list.innerHTML = '';
+    years.forEach((year, yearIndex) => {
+        const months = Object.keys(tree[year]).sort((a, b) => b - a);
+        const yearTotal = months.reduce((sum, m) => sum + Object.values(tree[year][m]).reduce((s, c) => s + c, 0), 0);
+
+        const yearEl = document.createElement('li');
+        yearEl.className = 'timeline-year' + (yearIndex === 0 ? ' expanded' : '');
+        yearEl.dataset.year = year;
+        yearEl.innerHTML = `
+            <svg class="timeline-chevron" width="10" height="10"><use href="#icon-chevron-right"/></svg>
+            <span class="timeline-year-label">${t('date.year', year)}</span>
+            <span class="timeline-year-count">${yearTotal}</span>
+        `;
+        yearEl.addEventListener('click', (e) => {
+            // Only toggle if clicking the year itself, not a child month
+            if (e.target.closest('.timeline-month') || e.target.closest('.timeline-day')) return;
+            yearEl.classList.toggle('expanded');
+            const monthsEl = yearEl.nextElementSibling;
+            if (monthsEl) monthsEl.classList.toggle('expanded');
+        });
+        list.appendChild(yearEl);
+
+        const monthsContainer = document.createElement('ul');
+        monthsContainer.className = 'timeline-months' + (yearIndex === 0 ? ' expanded' : '');
+
+        months.forEach(month => {
+            const days = Object.keys(tree[year][month]).sort((a, b) => b - a);
+            const monthTotal = days.reduce((sum, d) => sum + tree[year][month][d], 0);
+
+            const monthEl = document.createElement('li');
+            monthEl.className = 'timeline-month';
+            monthEl.dataset.year = year;
+            monthEl.dataset.month = month;
+            monthEl.innerHTML = `
+                <svg class="timeline-chevron" width="8" height="8"><use href="#icon-chevron-right"/></svg>
+                <span class="timeline-month-name">${t('date.month', month)}</span>
+                <span class="timeline-month-count">${monthTotal}</span>
+            `;
+
+            const daysContainer = document.createElement('ul');
+            daysContainer.className = 'timeline-days';
+
+            days.forEach(day => {
+                const dayEl = document.createElement('li');
+                dayEl.className = 'timeline-day';
+                dayEl.dataset.year = year;
+                dayEl.dataset.month = month;
+                dayEl.dataset.day = day;
+                dayEl.innerHTML = `
+                    <span class="timeline-day-name">${t('date.monthDay', month, day)}</span>
+                    <span class="timeline-day-count">${tree[year][month][day]}</span>
+                `;
+                dayEl.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    await selectTimelineDay(parseInt(year), parseInt(month), parseInt(day));
+                });
+                daysContainer.appendChild(dayEl);
+            });
+
+            monthEl.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                // Toggle days expansion
+                monthEl.classList.toggle('expanded');
+                daysContainer.classList.toggle('expanded');
+                // Also select this month
+                await selectTimelineMonth(parseInt(year), parseInt(month));
+            });
+
+            monthsContainer.appendChild(monthEl);
+            monthsContainer.appendChild(daysContainer);
+        });
+
+        list.appendChild(monthsContainer);
+    });
+}
+
+async function selectTimelineMonth(year, month) {
+    currentView = 'year';
+    currentYearFilter = year;
+    currentMonthFilter = month;
+    currentDayFilter = null;
+    currentSourcePath = '';
+    currentAlbumId = null;
+    searchQuery = '';
+
+    document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.timeline-year').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.timeline-month').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.timeline-day').forEach(i => i.classList.remove('active'));
+
+    const monthEl = document.querySelector(`.timeline-month[data-year="${year}"][data-month="${month}"]`);
+    if (monthEl) monthEl.classList.add('active');
+
+    document.getElementById('view-title').textContent = t('title.monthFilter', year, month);
+
+    document.querySelectorAll('.top-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector('.top-tab[data-tab="all"]').classList.add('active');
+    currentTab = 'all';
+
+    resetPhotos();
+    await loadPhotos();
+    saveSession();
+}
+
+async function selectTimelineDay(year, month, day) {
+    currentView = 'year';
+    currentYearFilter = year;
+    currentMonthFilter = month;
+    currentDayFilter = day;
+    currentSourcePath = '';
+    currentAlbumId = null;
+    searchQuery = '';
+
+    document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.timeline-year').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.timeline-month').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.timeline-day').forEach(i => i.classList.remove('active'));
+
+    const dayEl = document.querySelector(`.timeline-day[data-year="${year}"][data-month="${month}"][data-day="${day}"]`);
+    if (dayEl) dayEl.classList.add('active');
+
+    document.getElementById('view-title').textContent = t('title.dayFilter', year, month, day);
+
+    document.querySelectorAll('.top-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector('.top-tab[data-tab="all"]').classList.add('active');
+    currentTab = 'all';
+
+    resetPhotos();
+    await loadPhotos();
+    saveSession();
 }
 
 async function loadPhotos() {
@@ -578,7 +1070,11 @@ async function loadPhotos() {
     loadingEl.classList.add('visible');
 
     try {
-        const response = await fetch(`/api/photos?page=${currentPage}&per_page=${PER_PAGE}`);
+        let url = `/api/photos?page=${currentPage}&per_page=${PER_PAGE}`;
+        if (currentYearFilter) url += `&year=${currentYearFilter}`;
+        if (currentMonthFilter) url += `&month=${currentMonthFilter}`;
+        if (currentDayFilter) url += `&day=${currentDayFilter}`;
+        const response = await fetch(url);
         const data = await response.json();
 
         if (currentPage === 1) {
@@ -591,11 +1087,16 @@ async function loadPhotos() {
         hasMore = data.has_more;
 
         renderPhotos(data.photos);
-        updateStatus(data.total, selectedPhotos.size);
+        updateStatus(filteredPhotos.length, selectedPhotos.size);
+
+        // 初始加载后触发一次滚动同步
+        if (currentPage === 1) {
+            requestAnimationFrame(() => syncSidebarHighlight(document.getElementById('timeline')));
+        }
 
         currentPage++;
     } catch (err) {
-        console.error('加载失败:', err);
+        console.error(t('empty.noStats') + ':', err);
     } finally {
         isLoading = false;
         loadingEl.classList.remove('visible');
@@ -613,7 +1114,7 @@ async function loadTrash() {
 
         timeline.innerHTML = '';
         if (items.length === 0) {
-            timeline.innerHTML = '<div style="text-align:center;padding:60px;color:#666">回收站为空</div>';
+            timeline.innerHTML = '<div style="text-align:center;padding:60px;color:#666">' + t('empty.trashEmpty') + '</div>';
         } else {
             const grid = document.createElement('div');
             grid.className = 'photo-grid';
@@ -623,7 +1124,7 @@ async function loadTrash() {
                 const div = document.createElement('div');
                 div.className = 'photo-item';
                 div.innerHTML = `
-                    <div class="photo-date" style="opacity:1">${item.filename}<br>剩余 ${item.days_remaining} 天</div>
+                    <div class="photo-date" style="opacity:1">${item.filename}<br>${t('label.daysRemaining', item.days_remaining)}</div>
                 `;
                 // 没有缩略图时显示占位
                 const img = document.createElement('img');
@@ -637,7 +1138,7 @@ async function loadTrash() {
         }
         updateStatus(items.length, 0);
     } catch (err) {
-        console.error('加载回收站失败:', err);
+        console.error(t('empty.noStats') + ':', err);
     } finally {
         loadingEl.classList.remove('visible');
     }
@@ -645,6 +1146,8 @@ async function loadTrash() {
 
 function setupInfiniteScroll() {
     const timeline = document.getElementById('timeline');
+    let scrollSyncRAF = null;
+
     timeline.addEventListener('scroll', () => {
         if (isLoading || !hasMore) return;
         if (currentTab !== 'all') return;
@@ -655,10 +1158,554 @@ function setupInfiniteScroll() {
         if (scrollBottom >= threshold) {
             loadPhotos();
         }
+
+        // 滚动同步侧边栏高亮
+        if (scrollSyncRAF) cancelAnimationFrame(scrollSyncRAF);
+        scrollSyncRAF = requestAnimationFrame(() => {
+            syncSidebarHighlight(timeline);
+        });
+    });
+}
+
+function syncSidebarHighlight(timeline) {
+    // 只在全部照片视图且没有手动选择过滤时同步
+    if (currentView !== 'all' || currentYearFilter || currentMonthFilter || currentDayFilter) return;
+
+    const yearGroups = timeline.querySelectorAll('.year-group');
+    if (yearGroups.length === 0) return;
+
+    // 使用视口顶部+100px作为参考线，找到第一个跨越这条线的年份
+    const referenceLine = timeline.scrollTop + 80;
+    let currentYear = null;
+
+    for (const group of yearGroups) {
+        const groupTop = group.offsetTop;
+        const groupBottom = groupTop + group.offsetHeight;
+        if (groupTop <= referenceLine && groupBottom > referenceLine) {
+            currentYear = group.id.replace('year-', '');
+            break;
+        }
+    }
+
+    // 如果没找到（比如在两个年份之间），找最近的
+    if (!currentYear) {
+        let minDistance = Infinity;
+        for (const group of yearGroups) {
+            const groupTop = group.offsetTop;
+            const distance = Math.abs(groupTop - referenceLine);
+            if (distance < minDistance) {
+                minDistance = distance;
+                currentYear = group.id.replace('year-', '');
+            }
+        }
+    }
+
+    if (!currentYear) return;
+
+    // 只在年份变化时才更新，避免不必要的 DOM 操作
+    const activeYearEl = document.querySelector('.timeline-year.active');
+    if (activeYearEl && activeYearEl.dataset.year === currentYear) return;
+
+    // 更新侧边栏高亮
+    document.querySelectorAll('.timeline-year').forEach(el => {
+        el.classList.toggle('active', el.dataset.year === currentYear);
     });
 }
 
 // ========== 灯箱 ==========
+function formatExifValue(value, label) {
+    if (value === undefined || value === null || value === '') return '';
+    if (typeof value === 'object') return `<div class="exif-item"><span class="exif-label">${label}</span><span class="exif-value">${JSON.stringify(value).substring(0, 100)}</span></div>`;
+    return `<div class="exif-item"><span class="exif-label">${label}</span><span class="exif-value">${value}</span></div>`;
+}
+
+async function loadPhotoExif(photoId) {
+    const infoPanel = document.getElementById('viewer-exif');
+    if (!infoPanel) return;
+    
+    infoPanel.innerHTML = '<div class="exif-loading">' + t('exif.loading') + '</div>';
+    
+    // 从已加载的照片列表中获取GPS数据（无需等待EXIF接口）
+    const photo = filteredPhotos.find(p => p.id === photoId);
+    const photoLat = photo ? (photo.latitude !== undefined ? photo.latitude : photo.lat) : null;
+    const photoLon = photo ? (photo.longitude !== undefined ? photo.longitude : photo.lon) : null;
+    
+    try {
+        const response = await fetch(`/api/photo/${photoId}/exif`);
+        const data = await response.json();
+        
+        let html = '';
+        
+        // ========== GPS 位置信息（优先使用照片列表数据，也可从EXIF接口获取）==========
+        const gpsLat = photoLat !== undefined && photoLat !== null ? photoLat : (data.gps && data.gps.latitude);
+        const gpsLon = photoLon !== undefined && photoLon !== null ? photoLon : (data.gps && data.gps.longitude);
+        
+        if (gpsLat !== undefined && gpsLat !== null && gpsLon !== undefined && gpsLon !== null) {
+            html += '<div class="exif-section exif-gps-section">';
+            html += '<div class="exif-section-title">📍 ' + t('exif.gpsSection') + '</div>';
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.latitude')}</span><span class="exif-value">${typeof gpsLat === 'number' ? gpsLat.toFixed(6) : gpsLat}</span></div>`;
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.longitude')}</span><span class="exif-value">${typeof gpsLon === 'number' ? gpsLon.toFixed(6) : gpsLon}</span></div>`;
+            if (data.gps && data.gps.altitude) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.altitude')}</span><span class="exif-value">${data.gps.altitude}m</span></div>`;
+            }
+            const mapsUrl = `https://www.google.com/maps?q=${gpsLat},${gpsLon}`;
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.map')}</span><a href="${mapsUrl}" target="_blank" class="exif-value">${t('exif.viewInMaps')} ↗</a></div>`;
+            html += '</div>';
+        } else {
+            html += '<div class="exif-section exif-gps-section exif-gps-empty">';
+            html += '<div class="exif-section-title">📍 ' + t('exif.gpsSection') + '</div>';
+            html += '<div class="exif-item"><span class="exif-value" style="color:var(--text-muted)">' + t('exif.noGps') + '</span></div>';
+            html += '</div>';
+        }
+        
+        // ========== 解析拍摄时间（所有日期中取最早/最小的）==========
+        if (data.resolved_date && data.all_dates && data.all_dates.length > 0) {
+            html += '<div class="exif-section exif-resolved-date">';
+            html += '<div class="exif-section-title">📅 ' + t('exif.resolvedDate') + '</div>';
+            html += `<div class="exif-item exif-highlight"><span class="exif-label">✅ ${t('exif.finalAdopted')}</span><span class="exif-value exif-date-main">${data.resolved_date}</span></div>`;
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.source')}</span><span class="exif-value" style="color:#4CAF50">${data.resolved_source || ''}</span></div>`;
+            
+            // 展示所有候选日期供对比
+            html += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #333;">';
+            html += '<div style="font-size:0.7rem;color:#888;margin-bottom:4px">' + t('exif.allDatesCompare') + '</div>';
+            data.all_dates.forEach(d => {
+                const isEarliest = d.is_earliest;
+                const style = isEarliest ? 'color:#4CAF50;font-weight:bold' : 'color:#aaa';
+                const icon = isEarliest ? '✅ ' : '   ';
+                html += `<div style="font-size:0.75rem;padding:2px 0;${style}">${icon}${d.label}: ${d.date}</div>`;
+            });
+            html += '</div>';
+            html += '</div>';
+        }
+        
+        // 文件信息
+        html += '<div class="exif-section">';
+        html += '<div class="exif-section-title">' + t('exif.fileInfo') + '</div>';
+        
+        if (data.filename) {
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.filename')}</span><span class="exif-value" title="${data.filename}">${data.filename}</span></div>`;
+        }
+        if (data.format) {
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.format')}</span><span class="exif-value">${data.format}</span></div>`;
+        }
+        if (data.mode) {
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.colorMode')}</span><span class="exif-value">${data.mode}</span></div>`;
+        }
+        if (data.width && data.height) {
+            const mp = ((data.width * data.height) / 1000000).toFixed(1);
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.dimensions')}</span><span class="exif-value">${data.width} × ${data.height} (${mp} MP)</span></div>`;
+        }
+        if (data.file_size) {
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.fileSize')}</span><span class="exif-value">${formatSize(data.file_size)}</span></div>`;
+        }
+        html += '</div>';
+        
+        // 原始日期信息（汇总展示）
+        const hasAnyDate = data.filename_date || data.date_taken || data.date_digitized || 
+                          data.date_original || data.modified_time || data.birth_time ||
+                          data.creation_time || data.video_creation_time;
+        if (hasAnyDate) {
+            html += '<div class="exif-section">';
+            html += '<div class="exif-section-title">📆 ' + t('exif.rawDateSources') + '</div>';
+            if (data.filename_date) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.dateSource.filename')}</span><span class="exif-value">${data.filename_date}</span></div>`;
+            }
+            if (data.date_original) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.dateSource.exifOriginal')}</span><span class="exif-value">${data.date_original}</span></div>`;
+            }
+            if (data.date_taken) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.dateSource.exifDateTime')}</span><span class="exif-value">${data.date_taken}</span></div>`;
+            }
+            if (data.date_digitized) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.dateSource.exifDigitized')}</span><span class="exif-value">${data.date_digitized}</span></div>`;
+            }
+            if (data.creation_time) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.dateSource.videoCreate')}</span><span class="exif-value">${data.creation_time}</span></div>`;
+            }
+            if (data.video_creation_time) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.dateSource.videoStream')}</span><span class="exif-value">${data.video_creation_time}</span></div>`;
+            }
+            if (data.modified_time) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.dateSource.fileModified')}</span><span class="exif-value">${data.modified_time}</span></div>`;
+            }
+            if (data.birth_time) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.dateSource.fileCreated')}</span><span class="exif-value">${data.birth_time}</span></div>`;
+            }
+            if (data.db_date) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.dbRecord')}</span><span class="exif-value">${data.db_date}</span></div>`;
+            }
+            html += '</div>';
+        }
+        
+        // 相机信息
+        const hasCamera = data.camera || data.make || data.model || data.lens || data.lens_spec || data.body_serial || data.lens_serial;
+        if (hasCamera) {
+            html += '<div class="exif-section">';
+            html += '<div class="exif-section-title">' + t('exif.camera') + '</div>';
+            if (data.make) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.make')}</span><span class="exif-value">${data.make}</span></div>`;
+            }
+            if (data.model) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.model')}</span><span class="exif-value">${data.model}</span></div>`;
+            }
+            if (data.camera) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.device')}</span><span class="exif-value">${data.camera.trim()}</span></div>`;
+            }
+            if (data.lens) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.lens')}</span><span class="exif-value">${data.lens}</span></div>`;
+            }
+            if (data.lens_spec) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.lensSpec')}</span><span class="exif-value">${data.lens_spec}</span></div>`;
+            }
+            if (data.body_serial) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.bodySerial')}</span><span class="exif-value">${data.body_serial}</span></div>`;
+            }
+            if (data.lens_serial) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.lensSerial')}</span><span class="exif-value">${data.lens_serial}</span></div>`;
+            }
+            html += '</div>';
+        }
+        
+        // 拍摄参数
+        const hasExposure = data.aperture || data.iso || data.exposure || data.focal_length || data.exposure_bias || data.max_aperture || data.brightness;
+        if (hasExposure) {
+            html += '<div class="exif-section">';
+            html += '<div class="exif-section-title">' + t('exif.exposure') + '</div>';
+            if (data.aperture) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.aperture')}</span><span class="exif-value">f/${data.aperture}</span></div>`;
+            }
+            if (data.max_aperture) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.maxAperture')}</span><span class="exif-value">f/${data.max_aperture}</span></div>`;
+            }
+            if (data.iso) {
+                html += `<div class="exif-item"><span class="exif-label">ISO</span><span class="exif-value">${data.iso}</span></div>`;
+            }
+            if (data.exposure) {
+                let exp = data.exposure;
+                if (typeof exp === 'number' && exp < 1) {
+                    exp = `1/${Math.round(1/exp)}s`;
+                } else {
+                    exp = exp + 's';
+                }
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.shutter')}</span><span class="exif-value">${exp}</span></div>`;
+            }
+            if (data.exposure_bias) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.exposureComp')}</span><span class="exif-value">${data.exposure_bias} EV</span></div>`;
+            }
+            if (data.brightness) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.brightness')}</span><span class="exif-value">${data.brightness}</span></div>`;
+            }
+            if (data.focal_length) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.focalLength')}</span><span class="exif-value">${data.focal_length}mm</span></div>`;
+            }
+            if (data.subject_distance) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.focusDistance')}</span><span class="exif-value">${data.subject_distance}m</span></div>`;
+            }
+            if (data.digital_zoom) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.digitalZoom')}</span><span class="exif-value">${data.digital_zoom}x</span></div>`;
+            }
+            if (data.flash !== undefined && data.flash !== '') {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.flash')}</span><span class="exif-value">${data.flash}</span></div>`;
+            }
+            if (data.white_balance) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.whiteBalance')}</span><span class="exif-value">${data.white_balance}</span></div>`;
+            }
+            if (data.light_source) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.lightSource')}</span><span class="exif-value">${data.light_source}</span></div>`;
+            }
+            if (data.metering_mode) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.meteringMode')}</span><span class="exif-value">${data.metering_mode}</span></div>`;
+            }
+            if (data.exposure_mode) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.exposureMode')}</span><span class="exif-value">${data.exposure_mode}</span></div>`;
+            }
+            if (data.exposure_program) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.exposureProgram')}</span><span class="exif-value">${data.exposure_program}</span></div>`;
+            }
+            if (data.scene_type) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.sceneType')}</span><span class="exif-value">${data.scene_type}</span></div>`;
+            }
+            if (data.contrast) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.contrast')}</span><span class="exif-value">${data.contrast}</span></div>`;
+            }
+            if (data.saturation) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.saturation')}</span><span class="exif-value">${data.saturation}</span></div>`;
+            }
+            if (data.sharpness) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.sharpness')}</span><span class="exif-value">${data.sharpness}</span></div>`;
+            }
+            if (data.color_space) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.colorSpace')}</span><span class="exif-value">${data.color_space}</span></div>`;
+            }
+            if (data.orientation) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.orientation')}</span><span class="exif-value">${data.orientation}</span></div>`;
+            }
+            if (data.sensing_method) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.sensingMethod')}</span><span class="exif-value">${data.sensing_method}</span></div>`;
+            }
+            if (data.cfa_pattern) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.cfaPattern')}</span><span class="exif-value">${data.cfa_pattern}</span></div>`;
+            }
+            if (data.custom_rendered) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.customRendered')}</span><span class="exif-value">${data.custom_rendered}</span></div>`;
+            }
+            if (data.gain_control) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.gainControl')}</span><span class="exif-value">${data.gain_control}</span></div>`;
+            }
+            html += '</div>';
+        }
+        
+        // GPS
+        if (data.gps && data.gps.latitude !== undefined && data.gps.longitude !== undefined) {
+            html += '<div class="exif-section">';
+            html += '<div class="exif-section-title">' + t('exif.location') + '</div>';
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.latitude')}</span><span class="exif-value">${data.gps.latitude.toFixed(6)}</span></div>`;
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.longitude')}</span><span class="exif-value">${data.gps.longitude.toFixed(6)}</span></div>`;
+            if (data.gps.altitude) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.altitude')}</span><span class="exif-value">${data.gps.altitude}m</span></div>`;
+            }
+            if (data.gps.google_maps) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.map')}</span><a href="${data.gps.google_maps}" target="_blank" class="exif-value">${t('exif.viewInMaps')} ↗</a></div>`;
+            }
+            if (data.gps_altitude) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.gpsAltitude')}</span><span class="exif-value">${data.gps_altitude}</span></div>`;
+            }
+            if (data.gps_timestamp) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.gpsTime')}</span><span class="exif-value">${data.gps_timestamp}</span></div>`;
+            }
+            if (data.gps_datestamp) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.gpsDate')}</span><span class="exif-value">${data.gps_datestamp}</span></div>`;
+            }
+            if (data.gps_speed) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.gpsSpeed')}</span><span class="exif-value">${data.gps_speed}</span></div>`;
+            }
+            if (data.gps_track) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.gpsTrack')}</span><span class="exif-value">${data.gps_track}</span></div>`;
+            }
+            html += '</div>';
+        }
+        
+        // 视频信息
+        if (data.media_type === 'video' || data.duration || data.codec || data.fps) {
+            html += '<div class="exif-section">';
+            html += '<div class="exif-section-title">' + t('exif.videoInfo') + '</div>';
+            if (data.duration) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.duration')}</span><span class="exif-value">${data.duration}</span></div>`;
+            }
+            if (data.duration_seconds) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.durationSec')}</span><span class="exif-value">${data.duration_seconds}s</span></div>`;
+            }
+            if (data.width && data.height) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.resolution')}</span><span class="exif-value">${data.width} × ${data.height}</span></div>`;
+            }
+            if (data.codec) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.videoCodec')}</span><span class="exif-value">${data.codec}</span></div>`;
+            }
+            if (data.codec_tag) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.codecTag')}</span><span class="exif-value">${data.codec_tag}</span></div>`;
+            }
+            if (data.profile) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.profile')}</span><span class="exif-value">${data.profile}</span></div>`;
+            }
+            if (data.level) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.level')}</span><span class="exif-value">${data.level}</span></div>`;
+            }
+            if (data.bitrate) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.bitrate')}</span><span class="exif-value">${data.bitrate}</span></div>`;
+            }
+            if (data.fps) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.fps')}</span><span class="exif-value">${data.fps} fps</span></div>`;
+            }
+            if (data.avg_frame_rate) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.avgFrameRate')}</span><span class="exif-value">${data.avg_frame_rate}</span></div>`;
+            }
+            if (data.nb_frames) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.totalFrames')}</span><span class="exif-value">${data.nb_frames}</span></div>`;
+            }
+            if (data.pixel_format) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.pixelFormat')}</span><span class="exif-value">${data.pixel_format}</span></div>`;
+            }
+            if (data.color_range) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.colorRange')}</span><span class="exif-value">${data.color_range}</span></div>`;
+            }
+            if (data.color_space) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.colorSpace')}</span><span class="exif-value">${data.color_space}</span></div>`;
+            }
+            if (data.color_transfer) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.colorTransfer')}</span><span class="exif-value">${data.color_transfer}</span></div>`;
+            }
+            if (data.color_primaries) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.colorPrimaries')}</span><span class="exif-value">${data.color_primaries}</span></div>`;
+            }
+            if (data.display_aspect_ratio) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.displayAspect')}</span><span class="exif-value">${data.display_aspect_ratio}</span></div>`;
+            }
+            if (data.sample_aspect_ratio) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.sampleAspect')}</span><span class="exif-value">${data.sample_aspect_ratio}</span></div>`;
+            }
+            if (data.field_order) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.fieldOrder')}</span><span class="exif-value">${data.field_order}</span></div>`;
+            }
+            if (data.chroma_location) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.chromaLocation')}</span><span class="exif-value">${data.chroma_location}</span></div>`;
+            }
+            if (data.bits_per_raw_sample) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.bitDepth')}</span><span class="exif-value">${data.bits_per_raw_sample}bit</span></div>`;
+            }
+            if (data.has_b_frames !== undefined && data.has_b_frames !== '') {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.bFrames')}</span><span class="exif-value">${data.has_b_frames}</span></div>`;
+            }
+            if (data.is_avc) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.avc')}</span><span class="exif-value">${data.is_avc}</span></div>`;
+            }
+            if (data.nal_length_size) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.nalLength')}</span><span class="exif-value">${data.nal_length_size}</span></div>`;
+            }
+            html += '</div>';
+            
+            // 音频信息
+            if (data.audio_codec || data.audio_sample_rate || data.audio_channels) {
+                html += '<div class="exif-section">';
+                html += '<div class="exif-section-title">' + t('exif.audio') + '</div>';
+                if (data.audio_codec) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.audioCodec')}</span><span class="exif-value">${data.audio_codec}</span></div>`;
+                }
+                if (data.audio_sample_rate) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.sampleRate')}</span><span class="exif-value">${data.audio_sample_rate} Hz</span></div>`;
+                }
+                if (data.audio_channels) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.channels')}</span><span class="exif-value">${data.audio_channels}</span></div>`;
+                }
+                if (data.audio_channel_layout) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.channelLayout')}</span><span class="exif-value">${data.audio_channel_layout}</span></div>`;
+                }
+                if (data.audio_bit_rate) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.audioBitrate')}</span><span class="exif-value">${data.audio_bit_rate}</span></div>`;
+                }
+                if (data.audio_sample_fmt) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.sampleFormat')}</span><span class="exif-value">${data.audio_sample_fmt}</span></div>`;
+                }
+                if (data.audio_bits_per_sample) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.sampleBitDepth')}</span><span class="exif-value">${data.audio_bits_per_sample}bit</span></div>`;
+                }
+                html += '</div>';
+            }
+            
+            // 容器信息
+            if (data.format_name || data.format_long_name || data.nb_streams) {
+                html += '<div class="exif-section">';
+                html += '<div class="exif-section-title">' + t('exif.container') + '</div>';
+                if (data.format_long_name) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.format')}</span><span class="exif-value">${data.format_long_name}</span></div>`;
+                }
+                if (data.format_name) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.formatName')}</span><span class="exif-value">${data.format_name}</span></div>`;
+                }
+                if (data.nb_streams) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.streamCount')}</span><span class="exif-value">${data.nb_streams}</span></div>`;
+                }
+                if (data.probe_score) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.probeScore')}</span><span class="exif-value">${data.probe_score}</span></div>`;
+                }
+                html += '</div>';
+            }
+            
+            // 视频标签/元数据
+            if (data.creation_time || data.encoder || data.major_brand || data.location) {
+                html += '<div class="exif-section">';
+                html += '<div class="exif-section-title">' + t('exif.videoMetadata') + '</div>';
+                if (data.creation_time) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.createTime')}</span><span class="exif-value">${data.creation_time}</span></div>`;
+                }
+                if (data.encoder) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.encoder')}</span><span class="exif-value">${data.encoder}</span></div>`;
+                }
+                if (data.major_brand) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.brand')}</span><span class="exif-value">${data.major_brand}</span></div>`;
+                }
+                if (data.minor_version) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.version')}</span><span class="exif-value">${data.minor_version}</span></div>`;
+                }
+                if (data.compatible_brands) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.compatibleBrands')}</span><span class="exif-value">${data.compatible_brands}</span></div>`;
+                }
+                if (data.com_android_version) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.androidVersion')}</span><span class="exif-value">${data.com_android_version}</span></div>`;
+                }
+                if (data.com_android_manufacturer) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.deviceMake')}</span><span class="exif-value">${data.com_android_manufacturer}</span></div>`;
+                }
+                if (data.com_android_model) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.deviceModel')}</span><span class="exif-value">${data.com_android_model}</span></div>`;
+                }
+                if (data.location) {
+                    html += `<div class="exif-item"><span class="exif-label">${t('exif.location')}</span><span class="exif-value">${data.location}</span></div>`;
+                }
+                html += '</div>';
+            }
+        }
+        
+        // 软件/处理信息
+        if (data.software || data.copyright || data.artist || data.image_description || data.user_comment) {
+            html += '<div class="exif-section">';
+            html += '<div class="exif-section-title">' + t('exif.metadata') + '</div>';
+            if (data.software) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.software')}</span><span class="exif-value">${data.software}</span></div>`;
+            }
+            if (data.copyright) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.copyright')}</span><span class="exif-value">${data.copyright}</span></div>`;
+            }
+            if (data.artist) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.artist')}</span><span class="exif-value">${data.artist}</span></div>`;
+            }
+            if (data.image_description) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.description')}</span><span class="exif-value">${data.image_description}</span></div>`;
+            }
+            if (data.user_comment) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.userComment')}</span><span class="exif-value">${data.user_comment}</span></div>`;
+            }
+            html += '</div>';
+        }
+        
+        // 分辨率信息
+        if (data.resolution_x || data.resolution_y || data.resolution_unit) {
+            html += '<div class="exif-section">';
+            html += '<div class="exif-section-title">' + t('exif.resolution') + '</div>';
+            if (data.resolution_x) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.xResolution')}</span><span class="exif-value">${data.resolution_x}</span></div>`;
+            }
+            if (data.resolution_y) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.yResolution')}</span><span class="exif-value">${data.resolution_y}</span></div>`;
+            }
+            if (data.resolution_unit) {
+                html += `<div class="exif-item"><span class="exif-label">${t('exif.resolutionUnit')}</span><span class="exif-value">${data.resolution_unit}</span></div>`;
+            }
+            html += '</div>';
+        }
+        
+        // 路径
+        if (data.path) {
+            html += '<div class="exif-section">';
+            html += '<div class="exif-section-title">' + t('exif.path') + '</div>';
+            html += `<div class="exif-item"><span class="exif-value exif-path" title="${data.path}">${data.path}</span></div>`;
+            html += '</div>';
+        }
+        
+        // 错误信息
+        if (data.exif_error) {
+            html += '<div class="exif-section">';
+            html += '<div class="exif-section-title">' + t('exif.error') + '</div>';
+            html += `<div class="exif-item"><span class="exif-value" style="color:#ff6b6b">${data.exif_error}</span></div>`;
+            html += '</div>';
+        }
+        
+        infoPanel.innerHTML = html || '<div class="exif-loading">' + t('empty.noExif') + '</div>';
+    } catch (err) {
+        console.error(t('empty.noExif') + ':', err);
+        infoPanel.innerHTML = '<div class="exif-loading">' + t('empty.noExif') + ': ' + err.message + '</div>';
+    }
+}
+
 function openLightbox(photoId) {
     photoId = parseInt(photoId);
     const photo = filteredPhotos.find(p => p.id === photoId);
@@ -669,47 +1716,40 @@ function openLightbox(photoId) {
 
     currentIndex = filteredPhotos.findIndex(p => p.id === photoId);
 
-    const lightbox = document.getElementById('lightbox');
-    const imgContainer = document.getElementById('lightbox-media-container');
-    const dateSpan = document.getElementById('lightbox-date');
-    const sizeSpan = document.getElementById('lightbox-size');
-    const pathSpan = document.getElementById('lightbox-path');
-    const indexSpan = document.getElementById('lightbox-index');
-    const typeSpan = document.getElementById('lightbox-type');
+    const viewer = document.getElementById('viewer');
+    const mediaContainer = document.getElementById('viewer-media-container');
+    const counter = document.getElementById('viewer-index');
 
-    imgContainer.innerHTML = '';
-
+    // 渲染主媒体
+    mediaContainer.innerHTML = '';
     if (photo.media_type === 'video') {
         const video = document.createElement('video');
         video.src = photo.original_url;
         video.controls = true;
         video.autoplay = true;
-        video.style.maxWidth = '90%';
-        video.style.maxHeight = '70vh';
-        imgContainer.appendChild(video);
-        typeSpan.textContent = `🎬 视频 · ${photo.format}`;
+        mediaContainer.appendChild(video);
     } else {
         const img = document.createElement('img');
         img.src = photo.original_url;
         img.alt = photo.filename;
-        img.style.maxWidth = '90%';
-        img.style.maxHeight = '70vh';
-        imgContainer.appendChild(img);
-        typeSpan.textContent = `📷 图片 · ${photo.format}`;
+        mediaContainer.appendChild(img);
     }
 
-    dateSpan.textContent = formatDate(photo.date_taken).time;
-    sizeSpan.textContent = formatSize(photo.file_size);
-    pathSpan.textContent = photo.path;
-    indexSpan.textContent = `${currentIndex + 1} / ${filteredPhotos.length}`;
+    // 计数器
+    counter.textContent = `${currentIndex + 1} / ${filteredPhotos.length}`;
 
-    lightbox.classList.remove('hidden');
+    // 显示查看器
+    viewer.classList.remove('hidden');
     document.body.style.overflow = 'hidden';
+    
+    // 加载 EXIF 和缩略图条
+    loadPhotoExif(photoId);
+    renderFilmstrip();
 }
 
 function closeLightbox() {
-    const lightbox = document.getElementById('lightbox');
-    const container = document.getElementById('lightbox-media-container');
+    const viewer = document.getElementById('viewer');
+    const container = document.getElementById('viewer-media-container');
 
     const video = container.querySelector('video');
     if (video) {
@@ -717,7 +1757,7 @@ function closeLightbox() {
         video.src = '';
     }
 
-    lightbox.classList.add('hidden');
+    viewer.classList.add('hidden');
     document.body.style.overflow = '';
 }
 
@@ -735,20 +1775,68 @@ function showPrev() {
     }
 }
 
+// 渲染底部缩略图条
+function renderFilmstrip() {
+    const filmstrip = document.getElementById('filmstrip-inner');
+    if (!filmstrip) return;
+    
+    filmstrip.innerHTML = '';
+    
+    // 只渲染当前索引附近的照片，避免过多 DOM 节点
+    const range = 30;
+    const start = Math.max(0, currentIndex - range);
+    const end = Math.min(filteredPhotos.length, currentIndex + range + 1);
+    
+    for (let i = start; i < end; i++) {
+        const photo = filteredPhotos[i];
+        const item = document.createElement('div');
+        item.className = 'filmstrip-item' + (i === currentIndex ? ' active' : '');
+        item.dataset.index = i;
+        
+        const img = document.createElement('img');
+        img.src = photo.thumbnail_url;
+        img.alt = photo.filename;
+        img.loading = 'lazy';
+        item.appendChild(img);
+        
+        if (photo.media_type === 'video') {
+            const icon = document.createElement('span');
+            icon.className = 'filmstrip-video-icon';
+            icon.innerHTML = '<svg width="12" height="12"><use href="#icon-play"/></svg>';
+            item.appendChild(icon);
+        }
+        
+        item.addEventListener('click', () => {
+            currentIndex = i;
+            openLightbox(photo.id);
+        });
+        
+        filmstrip.appendChild(item);
+    }
+    
+    // 滚动到当前项
+    requestAnimationFrame(() => {
+        const activeItem = filmstrip.querySelector('.filmstrip-item.active');
+        if (activeItem) {
+            activeItem.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+        }
+    });
+}
+
 async function deleteCurrentPhoto() {
     if (filteredPhotos.length === 0) return;
 
     const photo = filteredPhotos[currentIndex];
-    const typeName = photo.media_type === 'video' ? '视频' : '照片';
+    const typeName = photo.media_type === 'video' ? t('dialog.video') : t('dialog.photo');
 
     const confirmed = await showDialog({
         type: 'confirm',
-        icon: '🗑️',
-        title: `删除${typeName}`,
-        message: `确定要删除这个${typeName}吗？<br><br><code>${photo.filename}</code><br><br>删除后可在回收站中恢复（保留30天）。`,
-        confirmText: '删除',
+        icon: '<svg width=\"32\" height=\"32\"><use href=\"#icon-trash\"/></svg>',
+        title: t('dialog.confirmDeleteSingle', typeName),
+        message: t('dialog.confirmDeleteSingleMsg', typeName, photo.filename),
+        confirmText: t('action.delete'),
         confirmClass: 'btn btn-danger',
-        cancelText: '取消'
+        cancelText: t('action.cancel')
     });
 
     if (!confirmed) return;
@@ -775,18 +1863,21 @@ async function deleteCurrentPhoto() {
                 openLightbox(filteredPhotos[currentIndex].id);
             }
             loadStats();
+            showToast(t('dialog.restored'));
+        } else {
+            showToast(data.error || t('dialog.deleteFailed'));
         }
     } catch (err) {
-        console.error('删除失败:', err);
-        showToast('删除失败');
+        console.error(t('dialog.deleteFailed') + ':', err);
+        showToast(t('dialog.deleteFailed') + ': ' + err.message);
     }
 }
 
 // ========== 状态栏 ==========
 function updateStatus(total, selected) {
     const text = selected > 0
-        ? `共 ${total} 个项目 | 选中 ${selected} 个`
-        : `共 ${total} 个项目`;
+        ? t('status.totalSelected', total, selected)
+        : t('status.totalCount', total);
     document.getElementById('status-text').textContent = text;
 }
 
@@ -800,8 +1891,10 @@ async function loadStats() {
         document.getElementById('count-videos').textContent = stats.videos || '';
         document.getElementById('count-favorites').textContent = stats.favorites || '';
         document.getElementById('count-trash').textContent = stats.trash || '';
+        const hiddenEl = document.getElementById('count-hidden');
+        if (hiddenEl) hiddenEl.textContent = stats.hidden || '';
     } catch (err) {
-        console.error('加载统计失败:', err);
+        console.error(t('empty.noStats') + ':', err);
     }
 }
 
@@ -822,16 +1915,27 @@ async function loadSources() {
             `;
             li.addEventListener('click', () => {
                 document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+                document.querySelectorAll('.timeline-month').forEach(i => i.classList.remove('active'));
+                document.querySelectorAll('.timeline-year').forEach(i => i.classList.remove('active'));
+                document.querySelectorAll('.timeline-day').forEach(i => i.classList.remove('active'));
                 li.classList.add('active');
                 document.getElementById('view-title').textContent = src.name;
+                currentView = 'source';
+                currentTab = 'all';
+                currentYearFilter = null;
+                currentMonthFilter = null;
+                currentDayFilter = null;
+                currentAlbumId = null;
+                searchQuery = '';
+                currentSourcePath = src.path;
                 resetPhotos();
-                // 来源筛选通过 API 参数实现
                 loadPhotosBySource(src.path);
+                saveSession();
             });
             list.appendChild(li);
         });
     } catch (err) {
-        console.error('加载来源失败:', err);
+        console.error(t('empty.noStats') + ':', err);
     }
 }
 
@@ -850,7 +1954,7 @@ async function loadPhotosBySource(sourcePath) {
         updateStatus(data.total, 0);
         hasMore = false;
     } catch (err) {
-        console.error('加载来源照片失败:', err);
+        console.error(t('empty.noStats') + ':', err);
     } finally {
         isLoading = false;
         loadingEl.classList.remove('visible');
@@ -868,21 +1972,33 @@ async function loadAlbums() {
             li.className = 'sidebar-item';
             li.dataset.album = album.id;
             li.innerHTML = `
-                <span class="sidebar-icon">📁</span>
+                <svg class="sidebar-icon" width="18" height="18"><use href="#icon-folder"/></svg>
                 <span class="sidebar-label">${album.name}</span>
                 <span class="sidebar-count">${album.count || 0}</span>
             `;
             li.addEventListener('click', () => {
                 document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+                document.querySelectorAll('.timeline-month').forEach(i => i.classList.remove('active'));
+                document.querySelectorAll('.timeline-year').forEach(i => i.classList.remove('active'));
+                document.querySelectorAll('.timeline-day').forEach(i => i.classList.remove('active'));
                 li.classList.add('active');
                 document.getElementById('view-title').textContent = album.name;
+                currentView = 'album';
+                currentTab = 'all';
+                currentYearFilter = null;
+                currentMonthFilter = null;
+                currentDayFilter = null;
+                currentSourcePath = '';
+                searchQuery = '';
+                currentAlbumId = album.id;
                 resetPhotos();
                 loadPhotosByAlbum(album.id);
+                saveSession();
             });
             list.appendChild(li);
         });
     } catch (err) {
-        console.error('加载相册失败:', err);
+        console.error(t('empty.noStats') + ':', err);
     }
 }
 
@@ -901,7 +2017,7 @@ async function loadPhotosByAlbum(albumId) {
         updateStatus(data.photos.length, 0);
         hasMore = false;
     } catch (err) {
-        console.error('加载相册照片失败:', err);
+        console.error(t('empty.noStats') + ':', err);
     } finally {
         isLoading = false;
         loadingEl.classList.remove('visible');
@@ -909,22 +2025,21 @@ async function loadPhotosByAlbum(albumId) {
 }
 
 // ========== 事件监听 ==========
-document.getElementById('lightbox').addEventListener('click', (e) => {
-    if (e.target.id === 'lightbox' || e.target.classList.contains('close')) {
+document.querySelector('.viewer-close').addEventListener('click', closeLightbox);
+document.querySelector('.viewer-delete-btn').addEventListener('click', deleteCurrentPhoto);
+document.querySelector('.viewer-prev').addEventListener('click', showPrev);
+document.querySelector('.viewer-next').addEventListener('click', showNext);
+
+document.getElementById('viewer').addEventListener('click', (e) => {
+    if (e.target.id === 'viewer') {
         closeLightbox();
-    }
-    if (e.target.classList.contains('prev')) {
-        showPrev();
-    }
-    if (e.target.classList.contains('next')) {
-        showNext();
     }
 });
 
 document.addEventListener('keydown', (e) => {
-    const lightbox = document.getElementById('lightbox');
+    const viewer = document.getElementById('viewer');
 
-    if (!lightbox.classList.contains('hidden')) {
+    if (!viewer.classList.contains('hidden')) {
         if (e.key === 'Escape') closeLightbox();
         if (e.key === 'ArrowRight') showNext();
         if (e.key === 'ArrowLeft') showPrev();
@@ -932,7 +2047,7 @@ document.addEventListener('keydown', (e) => {
             e.preventDefault();
             deleteCurrentPhoto();
         }
-        const video = document.querySelector('#lightbox-media-container video');
+        const video = document.querySelector('#viewer-media-container video');
         if (video && e.key === ' ') {
             e.preventDefault();
             if (video.paused) video.play();
@@ -949,11 +2064,11 @@ document.addEventListener('keydown', (e) => {
 let touchStartX = 0;
 let touchEndX = 0;
 
-document.getElementById('lightbox').addEventListener('touchstart', (e) => {
+document.getElementById('viewer').addEventListener('touchstart', (e) => {
     touchStartX = e.changedTouches[0].screenX;
 }, { passive: true });
 
-document.getElementById('lightbox').addEventListener('touchend', (e) => {
+document.getElementById('viewer').addEventListener('touchend', (e) => {
     touchEndX = e.changedTouches[0].screenX;
     handleSwipe();
 }, { passive: true });
@@ -979,7 +2094,7 @@ let dragBox = null;
 
 document.addEventListener('mousedown', (e) => {
     if (!selectionMode) return;
-    if (e.target.closest('.photo-item') || e.target.closest('.btn') || e.target.closest('.lightbox') || e.target.closest('.custom-dialog')) return;
+    if (e.target.closest('.photo-item') || e.target.closest('.btn') || e.target.closest('.viewer') || e.target.closest('.custom-dialog')) return;
 
     isDragging = true;
     dragStartX = e.clientX;
@@ -1041,23 +2156,376 @@ document.addEventListener('mouseup', () => {
 document.getElementById('select-mode-btn').addEventListener('click', enableSelectionMode);
 document.getElementById('cancel-selection-btn').addEventListener('click', disableSelectionMode);
 document.getElementById('batch-delete-btn').addEventListener('click', batchDelete);
+// ========== 设置面板 ==========
+const settingsPanel = document.getElementById('settings-panel');
+const settingsClose = document.getElementById('settings-close');
+const settingsOverlay = settingsPanel.querySelector('.settings-overlay');
+
 document.getElementById('settings-btn').addEventListener('click', () => {
-    showToast('设置功能开发中');
-});
-document.getElementById('new-album-btn').addEventListener('click', () => {
-    showToast('新建相册功能开发中');
+    settingsPanel.classList.remove('hidden');
 });
 
-function init() {
+settingsClose.addEventListener('click', () => {
+    settingsPanel.classList.add('hidden');
+});
+
+settingsOverlay.addEventListener('click', () => {
+    settingsPanel.classList.add('hidden');
+});
+
+// ========== Map Provider Selector ==========
+function initMapProviderSelector() {
+    const buttons = document.querySelectorAll('.map-provider-btn');
+    const currentProvider = getMapProvider();
+
+    buttons.forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.provider === currentProvider);
+        btn.addEventListener('click', () => {
+            const provider = btn.dataset.provider;
+            if (setMapProvider(provider)) {
+                buttons.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                showToast(t('settings.mapProvider') + ': ' + t('mapProvider.' + provider));
+            }
+        });
+    });
+}
+
+// ========== GPS 补录 ==========
+let backfillPollInterval = null;
+
+function updateBackfillProgress(data) {
+    const progressEl = document.getElementById('backfill-gps-progress');
+    const fillEl = document.getElementById('backfill-gps-fill');
+    const textEl = document.getElementById('backfill-gps-text');
+    const btn = document.getElementById('backfill-gps-btn');
+
+    progressEl.classList.remove('hidden');
+    const total = data.total || 1;
+    const pct = Math.min(100, Math.round((data.processed / total) * 100));
+    fillEl.style.width = pct + '%';
+    textEl.textContent = t('settings.progress', data.processed, data.total, data.updated);
+
+    if (data.is_running) {
+        btn.textContent = t('action.stopBackfill');
+    } else {
+        btn.textContent = t('action.startBackfill');
+    }
+}
+
+async function pollBackfillStatus() {
+    try {
+        const res = await fetch('/api/backfill_gps/status');
+        const data = await res.json();
+        updateBackfillProgress(data);
+        if (!data.is_running) {
+            clearInterval(backfillPollInterval);
+            backfillPollInterval = null;
+            showToast(data.message_key ? t(data.message_key) : t('settings.backfillComplete'));
+            setTimeout(() => {
+                document.getElementById('backfill-gps-progress').classList.add('hidden');
+            }, 3000);
+        }
+    } catch (e) {
+        console.error(t('settings.backfillStartFailed'), e);
+    }
+}
+
+document.getElementById('backfill-gps-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('backfill-gps-btn');
+    if (btn.textContent === t('action.stopBackfill')) {
+        await fetch('/api/backfill_gps/stop', { method: 'POST' });
+        return;
+    }
+
+    const res = await fetch('/api/backfill_gps/start', { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+        showToast(t('settings.backfillStarted'));
+        document.getElementById('backfill-gps-progress').classList.remove('hidden');
+        if (backfillPollInterval) clearInterval(backfillPollInterval);
+        backfillPollInterval = setInterval(pollBackfillStatus, 1000);
+    } else {
+        showToast(data.message_key ? t(data.message_key) : t('settings.backfillStartFailed'));
+    }
+});
+document.getElementById('new-album-btn').addEventListener('click', () => {
+    showToast(t('dialog.newAlbumWIP'));
+});
+
+function initLanguageSelector() {
+    document.querySelectorAll('.lang-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const lang = btn.dataset.lang;
+            if (lang && lang !== currentLang) {
+                setLang(lang);
+            }
+        });
+    });
+
+    // Refresh dynamic content when language changes
+    window.addEventListener('languagechanged', () => {
+        // Refresh view title
+        const titleEl = document.getElementById('view-title');
+        if (titleEl) {
+            if (currentView === 'all') titleEl.textContent = t('title.allPhotos');
+            else if (currentView === 'photos') titleEl.textContent = t('title.photos');
+            else if (currentView === 'videos') titleEl.textContent = t('title.videos');
+            else if (currentView === 'favorites') titleEl.textContent = t('title.favorites');
+            else if (currentView === 'recent') titleEl.textContent = t('title.recent');
+            else if (currentView === 'trash') titleEl.textContent = t('title.trash');
+            else if (currentView === 'dbinfo') titleEl.textContent = t('title.dbInfo');
+            else if (currentView === 'search' && searchQuery) titleEl.textContent = t('title.searchResults', searchQuery);
+            else if (currentView === 'year' && currentYearFilter) {
+                if (currentDayFilter) titleEl.textContent = t('title.dayFilter', currentYearFilter, currentMonthFilter, currentDayFilter);
+                else if (currentMonthFilter) titleEl.textContent = t('title.monthFilter', currentYearFilter, currentMonthFilter);
+                else titleEl.textContent = t('title.yearFilter', currentYearFilter);
+            }
+            else if (currentView === 'source' && currentSourcePath) titleEl.textContent = currentSourcePath;
+            else if (currentView === 'album' && currentAlbumId) {
+                const album = allAlbums.find(a => a.id === parseInt(currentAlbumId));
+                titleEl.textContent = album ? album.name : t('title.photos');
+            }
+        }
+
+        // Refresh timeline (year/month/day labels)
+        const timeline = document.getElementById('timeline');
+        if (timeline && currentTab === 'timeline') {
+            timeline.innerHTML = '';
+            currentPage = 1;
+            hasMore = true;
+            loadPhotos();
+        }
+
+        // Refresh years view
+        if (currentTab === 'years') {
+            renderYearsView();
+        }
+
+        // Refresh map
+        if (currentTab === 'map' && typeof mapInstance !== 'undefined' && mapInstance) {
+            loadMapPhotos();
+        }
+
+        // Refresh stats
+        loadStats();
+
+        // Refresh EXIF panel if open
+        const exifPanel = document.getElementById('exif-panel');
+        if (exifPanel && !exifPanel.classList.contains('hidden') && currentPhotoId) {
+            loadExifInfo(currentPhotoId);
+        }
+
+        // Refresh selection UI
+        if (selectionMode) {
+            updateSelectionUI();
+        }
+
+        // Refresh status bar
+        updateStatus(filteredPhotos.length, selectedPhotos.size);
+    });
+}
+
+async function init() {
     initThumbSizeControl();
     initSidebar();
     initTopTabs();
     initSearch();
-    loadPhotos();
+    initLanguageSelector();
+    initMapProviderSelector();
+    await loadTimelineData();
     setupInfiniteScroll();
     loadStats();
     loadSources();
     loadAlbums();
+
+    // Try to restore session first; if no saved session, load default photos
+    const restored = restoreSession();
+    if (!restored) {
+        await loadPhotos();
+    }
+
+    setupSessionAutoSave();
+}
+
+// ========== Session Persistence ==========
+function saveSession() {
+    const session = {
+        currentView,
+        currentTab,
+        currentYearFilter,
+        currentMonthFilter,
+        currentDayFilter,
+        searchQuery,
+        currentSourcePath,
+        currentAlbumId,
+        scrollTop: document.getElementById('timeline')?.scrollTop || 0,
+        thumbSize: parseInt(localStorage.getItem('thumbSize')) || 200
+    };
+
+    // Save map state if map is initialized
+    if (mapInstance) {
+        const center = mapInstance.getCenter();
+        session.mapState = {
+            lat: center.lat,
+            lng: center.lng,
+            zoom: mapInstance.getZoom()
+        };
+    }
+
+    localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+}
+
+function restoreSession() {
+    try {
+        const saved = localStorage.getItem(SESSION_KEY);
+        if (!saved) return false;
+        const session = JSON.parse(saved);
+
+        // Restore thumbnail size
+        if (session.thumbSize) {
+            thumbSize = session.thumbSize;
+            const slider = document.getElementById('thumb-size');
+            if (slider) slider.value = thumbSize;
+            applyThumbSize(thumbSize);
+        }
+
+        // Restore search query
+        if (session.searchQuery) {
+            const searchInput = document.getElementById('search-input');
+            if (searchInput) searchInput.value = session.searchQuery;
+            searchQuery = session.searchQuery;
+        }
+
+        // Restore year/month/day filters
+        if (session.currentYearFilter) currentYearFilter = session.currentYearFilter;
+        if (session.currentMonthFilter) currentMonthFilter = session.currentMonthFilter;
+        if (session.currentDayFilter) currentDayFilter = session.currentDayFilter;
+
+        // Restore source path
+        if (session.currentSourcePath) {
+            currentSourcePath = session.currentSourcePath;
+        }
+
+        // Restore album
+        if (session.currentAlbumId) {
+            currentAlbumId = session.currentAlbumId;
+        }
+
+        // Restore view and tab
+        const targetView = session.currentView || 'all';
+        const targetTab = session.currentTab || 'all';
+
+        // Update sidebar active state for view
+        document.querySelectorAll('.sidebar-item[data-view]').forEach(item => {
+            item.classList.toggle('active', item.dataset.view === targetView);
+        });
+
+        // Update top tabs
+        document.querySelectorAll('.top-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.tab === targetTab);
+        });
+
+        // Apply the restored state
+        if (targetTab === 'years') {
+            currentTab = 'years';
+            loadYearsView();
+        } else if (targetTab === 'map') {
+            currentTab = 'map';
+            loadMapView(session.mapState);
+        } else if (targetTab === 'dbinfo') {
+            currentTab = 'dbinfo';
+            loadDbInfo();
+        } else if (targetView === 'trash') {
+            currentView = 'trash';
+            currentTab = 'all';
+            switchView('trash');
+        } else if (targetView === 'hidden') {
+            currentView = 'hidden';
+            currentTab = 'all';
+            switchView('hidden');
+        } else if (targetView === 'search' && searchQuery) {
+            currentView = 'search';
+            currentTab = 'all';
+            document.getElementById('view-title').textContent = t('title.searchResults', searchQuery);
+            resetPhotos();
+            loadPhotos();
+        } else if (targetView === 'source' && currentSourcePath) {
+            currentView = 'source';
+            currentTab = 'all';
+            document.getElementById('view-title').textContent = currentSourcePath;
+            resetPhotos();
+            loadPhotosBySource(currentSourcePath);
+            // Highlight source in sidebar
+            document.querySelectorAll('#sources-list .sidebar-item').forEach(item => {
+                if (item.dataset.source === currentSourcePath) item.classList.add('active');
+            });
+        } else if (targetView === 'album' && currentAlbumId) {
+            currentView = 'album';
+            currentTab = 'all';
+            const album = allAlbums.find(a => a.id === parseInt(currentAlbumId));
+            document.getElementById('view-title').textContent = album ? album.name : t('title.photos');
+            resetPhotos();
+            loadPhotosByAlbum(currentAlbumId);
+            // Highlight album in sidebar
+            document.querySelectorAll('#albums-list .sidebar-item').forEach(item => {
+                if (parseInt(item.dataset.album) === parseInt(currentAlbumId)) item.classList.add('active');
+            });
+        } else if (currentYearFilter) {
+            currentView = 'year';
+            currentTab = 'all';
+            if (currentDayFilter) {
+                document.getElementById('view-title').textContent = t('title.dayFilter', currentYearFilter, currentMonthFilter, currentDayFilter);
+            } else if (currentMonthFilter) {
+                document.getElementById('view-title').textContent = t('title.monthFilter', currentYearFilter, currentMonthFilter);
+            } else {
+                document.getElementById('view-title').textContent = t('title.yearFilter', currentYearFilter);
+            }
+            resetPhotos();
+            loadPhotos();
+        } else if (targetTab === 'all') {
+            currentView = targetView;
+            currentTab = targetTab;
+            switchView(targetView);
+        } else {
+            // Fallback for any unhandled case - default to all photos
+            currentView = 'all';
+            currentTab = 'all';
+            switchView('all');
+        }
+
+        // Restore scroll position after content loads
+        if (session.scrollTop && targetTab !== 'map' && targetTab !== 'dbinfo') {
+            setTimeout(() => {
+                const timeline = document.getElementById('timeline');
+                if (timeline) timeline.scrollTop = session.scrollTop;
+            }, 500);
+        }
+
+        return true;
+    } catch (e) {
+        console.error('Failed to restore session:', e);
+        return false;
+    }
+}
+
+// Auto-save session on state changes and before unload
+function setupSessionAutoSave() {
+    // Save on scroll (throttled)
+    let scrollTimeout;
+    const timeline = document.getElementById('timeline');
+    if (timeline) {
+        timeline.addEventListener('scroll', () => {
+            clearTimeout(scrollTimeout);
+            scrollTimeout = setTimeout(saveSession, 300);
+        });
+    }
+
+    // Save before page unload
+    window.addEventListener('beforeunload', saveSession);
+
+    // Save periodically (every 5 seconds)
+    setInterval(saveSession, 5000);
 }
 
 init();

@@ -107,12 +107,14 @@ body {
     background: none;
     border: none;
     color: var(--text-secondary);
-    font-size: 1rem;
     cursor: pointer;
-    padding: 0 4px;
+    padding: 2px;
     line-height: 1;
     opacity: 0.7;
     transition: opacity 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .sidebar-action-btn:hover {
@@ -149,10 +151,16 @@ body {
 }
 
 .sidebar-icon {
-    font-size: 1rem;
-    width: 20px;
-    text-align: center;
+    width: 18px;
+    height: 18px;
     flex-shrink: 0;
+    color: var(--text-secondary);
+    transition: color 0.15s;
+}
+
+.sidebar-item:hover .sidebar-icon,
+.sidebar-item.active .sidebar-icon {
+    color: var(--text-primary);
 }
 
 .sidebar-label {
@@ -709,107 +717,363 @@ body.selection-mode .photo-checkbox {
     pointer-events: none;
 }
 
-/* 灯箱视频 */
-#lightbox-media-container video {
-    max-width: 90%;
-    max-height: 70vh;
-    border-radius: 4px;
-}
-
-/* 灯箱 */
-.lightbox {
+/* ========== Fot 风格图片查看器 ========== */
+.viewer {
     position: fixed;
     top: 0;
     left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0,0,0,0.95);
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
+    width: 100vw;
+    height: 100vh;
+    background: #0a0a0a;
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    grid-template-rows: 1fr 90px;
+    grid-template-areas:
+        "main sidebar"
+        "filmstrip filmstrip";
     z-index: 1000;
-    padding: 20px;
-    touch-action: pan-y pinch-zoom;
 }
 
-.lightbox.hidden {
+.viewer.hidden {
     display: none;
 }
 
-.lightbox img {
-    max-width: 90%;
-    max-height: 70vh;
+/* 主媒体区 */
+.viewer-main {
+    grid-area: main;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: #0a0a0a;
+}
+
+.viewer-media-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    padding: 40px 60px 10px;
+}
+
+#viewer-media-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+}
+
+#viewer-media-container img {
+    max-width: 100%;
+    max-height: calc(100vh - 160px);
     object-fit: contain;
+    border-radius: 4px;
+    user-select: none;
+}
+
+#viewer-media-container video {
+    max-width: 100%;
+    max-height: calc(100vh - 160px);
     border-radius: 4px;
 }
 
-.lightbox .close {
+/* 关闭按钮 */
+.viewer-close {
     position: absolute;
-    top: 15px;
-    right: 20px;
-    font-size: 2.5rem;
+    top: 12px;
+    left: 16px;
+    width: 40px;
+    height: 40px;
+    background: rgba(255,255,255,0.1);
+    border: none;
+    border-radius: 50%;
     color: #fff;
+    font-size: 1.2rem;
     cursor: pointer;
-    opacity: 0.7;
-    transition: opacity 0.2s;
-    padding: 10px;
-    z-index: 1001;
+    z-index: 1002;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
 }
 
-.lightbox .close:hover {
-    opacity: 1;
+.viewer-close:hover {
+    background: rgba(255,255,255,0.2);
 }
 
-.lightbox-nav {
+/* 左右导航 */
+.viewer-nav {
     position: absolute;
     top: 50%;
     transform: translateY(-50%);
-    font-size: 2rem;
+    width: 50px;
+    height: 80px;
+    background: rgba(0,0,0,0.3);
+    border: none;
     color: #fff;
-    opacity: 0.5;
+    font-size: 2.5rem;
     cursor: pointer;
-    padding: 20px 15px;
-    transition: opacity 0.2s;
     z-index: 1001;
-    display: none;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.4;
+    transition: opacity 0.2s, background 0.2s;
+    border-radius: 8px;
 }
 
-.lightbox-nav:hover {
+.viewer-nav:hover {
+    opacity: 0.9;
+    background: rgba(0,0,0,0.6);
+}
+
+.viewer-prev {
+    left: 10px;
+}
+
+.viewer-next {
+    right: 10px;
+}
+
+/* 计数器 */
+.viewer-counter {
+    position: absolute;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #888;
+    font-size: 0.85rem;
+    z-index: 1001;
+}
+
+/* 右侧信息面板 */
+.viewer-sidebar {
+    grid-area: sidebar;
+    background: #141414;
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.viewer-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-primary);
+    flex-shrink: 0;
+}
+
+.viewer-sidebar-toggle {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 1.2rem;
+    cursor: pointer;
+}
+
+.viewer-exif {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+}
+
+.viewer-exif::-webkit-scrollbar {
+    width: 4px;
+}
+
+.viewer-exif::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 2px;
+}
+
+.exif-loading {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 20px 0;
+}
+
+.exif-section {
+    margin-bottom: 16px;
+}
+
+.exif-section-title {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+}
+
+.exif-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 6px 0;
+    font-size: 0.82rem;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+.exif-item:last-child {
+    border-bottom: none;
+}
+
+.exif-label {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    margin-right: 12px;
+}
+
+.exif-value {
+    color: var(--text-primary);
+    text-align: right;
+    word-break: break-word;
+    max-width: 65%;
+}
+
+.exif-value.exif-path {
+    font-size: 0.7rem;
+    font-family: monospace;
+    color: var(--text-muted);
+}
+
+a.exif-value {
+    color: var(--accent);
+    text-decoration: none;
+}
+
+a.exif-value:hover {
+    text-decoration: underline;
+}
+
+/* 程序解析的拍摄时间高亮 */
+.exif-parsed-date {
+    background: rgba(59, 130, 246, 0.08);
+    border-radius: 8px;
+    padding: 12px;
+    margin: -4px -4px 16px -4px;
+    border: 1px solid rgba(59, 130, 246, 0.15);
+}
+
+.exif-parsed-date .exif-section-title {
+    color: #60a5fa;
+    border-bottom-color: rgba(59, 130, 246, 0.2);
+}
+
+.exif-date-main {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #93c5fd !important;
+}
+
+.exif-highlight .exif-value {
+    color: #fbbf24 !important;
+}
+
+/* GPS位置信息高亮 */
+.exif-gps-section {
+    background: rgba(34, 197, 94, 0.08);
+    border-radius: 8px;
+    padding: 12px;
+    margin: -4px -4px 16px -4px;
+    border: 1px solid rgba(34, 197, 94, 0.2);
+}
+
+.exif-gps-section .exif-section-title {
+    color: #4ade80;
+    border-bottom-color: rgba(34, 197, 94, 0.2);
+}
+
+.exif-gps-empty .exif-section-title {
+    color: #6b7280;
+}
+
+.exif-gps-empty {
+    background: rgba(107, 114, 128, 0.05);
+    border: 1px solid rgba(107, 114, 128, 0.1);
+}
+
+/* 底部缩略图条 */
+.viewer-filmstrip {
+    grid-area: filmstrip;
+    background: #0f0f0f;
+    border-top: 1px solid var(--border);
+    padding: 8px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.viewer-filmstrip::-webkit-scrollbar {
+    height: 6px;
+}
+
+.viewer-filmstrip::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.viewer-filmstrip::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 3px;
+}
+
+.filmstrip-inner {
+    display: flex;
+    gap: 6px;
+    height: 100%;
+    align-items: center;
+}
+
+.filmstrip-item {
+    flex-shrink: 0;
+    width: 70px;
+    height: 70px;
+    border-radius: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 2px solid transparent;
+    opacity: 0.6;
+    transition: opacity 0.2s, border-color 0.2s;
+    position: relative;
+    background: var(--bg-secondary);
+}
+
+.filmstrip-item:hover {
     opacity: 0.9;
 }
 
-.lightbox-nav.prev {
-    left: 5px;
+.filmstrip-item.active {
+    border-color: var(--accent);
+    opacity: 1;
 }
 
-.lightbox-nav.next {
-    right: 5px;
+.filmstrip-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
 }
 
-.lightbox-info {
-    margin-top: 15px;
-    text-align: center;
-    color: #aaa;
-    font-size: 0.9rem;
-}
-
-.lightbox-info span {
-    margin: 0 10px;
-}
-
-.lightbox-path {
-    margin-top: 8px;
-    text-align: center;
-    color: #666;
-    font-size: 0.75rem;
-    max-width: 80%;
-    word-break: break-all;
-    font-family: monospace;
-}
-
-.lightbox-actions {
-    margin-top: 15px;
+.filmstrip-item .filmstrip-video-icon {
+    position: absolute;
+    bottom: 2px;
+    right: 2px;
+    font-size: 0.6rem;
+    color: #fff;
+    background: rgba(0,0,0,0.6);
+    padding: 1px 3px;
+    border-radius: 2px;
 }
 
 /* 加载提示 */
@@ -970,6 +1234,98 @@ body.selection-mode .photo-checkbox {
     box-shadow: 0 0 0 3px var(--accent) inset;
 }
 
+/* ========== 地图视图 ========== */
+#map-container {
+    width: 100%;
+    height: calc(100vh - var(--top-bar-height) - var(--status-bar-height));
+    background: #0f0f0f;
+    z-index: 1;
+}
+
+/* Leaflet dark theme overrides */
+.leaflet-container {
+    background: #0f0f0f;
+}
+
+.dark-popup .leaflet-popup-content-wrapper {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+}
+
+.dark-popup .leaflet-popup-tip {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-left: none;
+}
+
+.dark-popup .leaflet-popup-content {
+    margin: 8px;
+    line-height: 1.4;
+}
+
+.map-popup {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    min-width: 120px;
+    max-width: 180px;
+}
+
+.map-popup-thumb {
+    width: 120px;
+    height: 120px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+    display: block;
+    background: var(--bg-primary);
+}
+
+.map-popup-info {
+    text-align: center;
+    width: 100%;
+}
+
+.map-popup-date {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-bottom: 2px;
+}
+
+.map-popup-name {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* Leaflet controls dark theme */
+.leaflet-control-zoom a {
+    background: var(--bg-secondary) !important;
+    color: var(--text-primary) !important;
+    border-color: var(--border) !important;
+}
+
+.leaflet-control-zoom a:hover {
+    background: var(--bg-hover) !important;
+}
+
+.leaflet-control-attribution {
+    background: rgba(15, 15, 15, 0.8) !important;
+    color: var(--text-muted) !important;
+    font-size: 0.65rem !important;
+}
+
+.leaflet-control-attribution a {
+    color: var(--text-secondary) !important;
+}
+
 /* ========== 地图视图占位 ========== */
 .map-placeholder,
 .dbinfo-placeholder {
@@ -1029,6 +1385,161 @@ body.selection-mode .photo-checkbox {
     color: var(--text-primary);
 }
 
+/* ========== 时间轴侧边栏 ========== */
+.timeline-year {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    user-select: none;
+    transition: background 0.15s;
+}
+
+.timeline-year:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.timeline-year.active {
+    background: var(--bg-active);
+    color: var(--text-primary);
+}
+
+.timeline-chevron {
+    font-size: 0.65rem;
+    width: 14px;
+    text-align: center;
+    transition: transform 0.2s;
+    color: var(--text-muted);
+}
+
+.timeline-year.expanded .timeline-chevron {
+    transform: rotate(90deg);
+}
+
+.timeline-year-label {
+    flex: 1;
+}
+
+.timeline-year-count {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.timeline-months {
+    display: none;
+    padding-left: 20px;
+    list-style: none;
+}
+
+.timeline-year.expanded + .timeline-months,
+.timeline-months.expanded {
+    display: block;
+}
+
+.timeline-month {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    user-select: none;
+    transition: background 0.15s;
+}
+
+.timeline-month:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.timeline-month.active {
+    background: var(--bg-active);
+    color: var(--text-primary);
+}
+
+.timeline-month-name {
+    flex: 1;
+}
+
+.timeline-month-count {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.timeline-month.active .timeline-month-count {
+    color: var(--text-secondary);
+}
+
+/* ========== 时间轴侧边栏 - 日期层级 ========== */
+.timeline-days {
+    display: none;
+    padding-left: 16px;
+    list-style: none;
+}
+
+.timeline-month.expanded + .timeline-days,
+.timeline-days.expanded {
+    display: block;
+}
+
+.timeline-day {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    user-select: none;
+    transition: background 0.15s;
+}
+
+.timeline-day:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.timeline-day.active {
+    background: var(--bg-active);
+    color: var(--text-primary);
+}
+
+.timeline-day-name {
+    flex: 1;
+}
+
+.timeline-day-count {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.timeline-day.active .timeline-day-count {
+    color: var(--text-secondary);
+}
+
+/* Month chevron rotation when expanded */
+.timeline-month.expanded .timeline-chevron {
+    transform: rotate(90deg);
+}
+
+/* ========== 照片网格 - 日期标签 ========== */
+.day-label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin: 12px 0 10px;
+    position: relative;
+    z-index: 1;
+    padding-left: 4px;
+}
+
 /* ========== 年份视图 ========== */
 .years-view {
     padding: 20px 4px;
@@ -1080,7 +1591,7 @@ body.selection-mode .photo-checkbox {
         padding: 14px 5px 5px;
     }
 
-    .lightbox-nav {
+    .viewer-nav {
         display: block;
     }
 
@@ -1156,6 +1667,11 @@ body.selection-mode .photo-checkbox {
         margin: 10px 0 8px;
     }
 
+    .day-label {
+        font-size: 0.8rem;
+        margin: 8px 0 6px;
+    }
+
     .photo-grid {
         grid-template-columns: repeat(3, 1fr);
         gap: 4px;
@@ -1177,17 +1693,17 @@ body.selection-mode .photo-checkbox {
         font-size: 11px;
     }
 
-    .lightbox {
+    .viewer {
         padding: 0;
     }
 
-    .lightbox img {
+    #viewer-media-container img {
         max-width: 100%;
         max-height: 65vh;
         border-radius: 0;
     }
 
-    .lightbox .close {
+    .viewer-close {
         top: 10px;
         right: 10px;
         font-size: 2rem;
@@ -1201,33 +1717,29 @@ body.selection-mode .photo-checkbox {
         justify-content: center;
     }
 
-    .lightbox-nav {
+    .viewer-nav {
         display: block;
         font-size: 1.5rem;
         padding: 30px 10px;
     }
 
-    .lightbox-nav.prev {
+    .viewer-nav.viewer-prev {
         left: 0;
     }
 
-    .lightbox-nav.next {
+    .viewer-nav.viewer-next {
         right: 0;
     }
 
-    .lightbox-info {
+    .viewer-counter {
         margin-top: 10px;
         font-size: 0.8rem;
         padding: 0 10px;
     }
 
-    .lightbox-path {
+    .exif-value.exif-path {
         font-size: 0.65rem;
         max-width: 90%;
-    }
-
-    .lightbox-actions {
-        margin-top: 10px;
     }
 
     .loading {
@@ -1270,6 +1782,10 @@ body.selection-mode .photo-checkbox {
     .month-label {
         font-size: 0.8rem;
     }
+
+    .day-label {
+        font-size: 0.75rem;
+    }
 }
 
 /* ==================== 横屏 ==================== */
@@ -1282,7 +1798,215 @@ body.selection-mode .photo-checkbox {
         font-size: 1rem;
     }
 
-    .lightbox img {
+    #viewer-media-container img {
         max-height: 60vh;
     }
+}
+
+/* ========== 设置面板 ========== */
+.settings-panel {
+    position: fixed;
+    inset: 0;
+    z-index: 300;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.settings-panel.hidden {
+    display: none;
+}
+.settings-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+}
+.settings-box {
+    position: relative;
+    background: var(--bg-secondary);
+    border-radius: var(--radius);
+    width: 480px;
+    max-width: 90vw;
+    max-height: 80vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+.settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+}
+.settings-header h3 {
+    font-size: 18px;
+    font-weight: 600;
+}
+.settings-content {
+    padding: 20px;
+    overflow-y: auto;
+}
+.settings-section {
+    margin-bottom: 24px;
+}
+.settings-section h4 {
+    font-size: 14px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+}
+.settings-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+}
+.settings-item-info {
+    flex: 1;
+}
+.settings-item-title {
+    font-size: 15px;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+.settings-item-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.backfill-progress {
+    margin-top: 12px;
+}
+.backfill-progress.hidden {
+    display: none;
+}
+.progress-bar {
+    height: 8px;
+    background: var(--bg-hover);
+    border-radius: 4px;
+    overflow: hidden;
+}
+.progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+    width: 0%;
+}
+.progress-text {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-top: 6px;
+    text-align: right;
+}
+
+/* Language Selector */
+.lang-selector {
+    display: flex;
+    gap: 0;
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 3px;
+    width: fit-content;
+}
+.lang-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+.lang-btn:hover {
+    color: var(--text-primary);
+}
+.lang-btn.active {
+    background: var(--bg-active);
+    color: var(--text-primary);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+.lang-flag {
+    font-size: 14px;
+    line-height: 1;
+}
+.lang-name {
+    line-height: 1;
+}
+
+/* Map Provider Selector */
+.map-provider-selector {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+.map-provider-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.map-provider-btn:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+}
+.map-provider-btn.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+
+/* Eye icon on photo thumbnails */
+.photo-hide-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.5);
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s ease, background 0.2s ease;
+    z-index: 5;
+    padding: 0;
+}
+.photo-item:hover .photo-hide-btn {
+    opacity: 1;
+}
+.photo-hide-btn:hover {
+    background: rgba(0, 0, 0, 0.8);
+}
+.photo-hide-btn svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* Hidden photos view */
+.photo-item.hidden-photo {
+    opacity: 0.7;
+}
+.photo-item.hidden-photo .photo-thumbnail {
+    filter: grayscale(40%);
 }

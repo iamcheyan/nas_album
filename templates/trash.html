@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>回收站 - 照片时间线</title>
+    <title data-i18n="title.trashPage">回收站 - 照片时间线</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <style>
         .trash-header {
@@ -105,15 +105,16 @@
 </head>
 <body>
     <div class="trash-header">
-        <h1>🗑 回收站</h1>
-        <p>删除的照片会在这里保留 30 天，之后自动永久删除</p>
-        <a href="/" class="back-link">← 返回相册</a>
+        <h1 data-i18n="trash.header">🗑 回收站</h1>
+        <p data-i18n="trash.description">删除的照片会在这里保留 30 天，之后自动永久删除</p>
+        <a href="/" class="back-link" data-i18n="trash.backToAlbum">← 返回相册</a>
     </div>
 
     <div id="trash-content">
-        <div class="loading visible">加载中...</div>
+        <div class="loading visible" data-i18n="trash.loading">加载中...</div>
     </div>
 
+    <script src="/static/js/i18n.js"></script>
     <script>
         async function loadTrash() {
             try {
@@ -125,7 +126,7 @@
                 if (items.length === 0) {
                     container.innerHTML = `
                         <div class="empty-state">
-                            <p>回收站是空的</p>
+                            <p data-i18n="empty.trashEmpty">回收站是空的</p>
                         </div>
                     `;
                     return;
@@ -147,12 +148,12 @@
                              onerror="this.style.display='none'">
                         <div class="trash-item-info">
                             <div class="filename">${item.filename}</div>
-                            <div class="meta">${new Date(item.deleted_at).toLocaleString('zh-CN')}</div>
-                            <div class="countdown">${item.days_remaining} 天后自动删除</div>
+                            <div class="meta">${new Date(item.deleted_at).toLocaleString(currentLang === 'zh' ? 'zh-CN' : currentLang)}</div>
+                            <div class="countdown">${t('trash.daysRemaining', item.days_remaining)}</div>
                         </div>
                         <div class="trash-actions">
-                            <button class="btn-restore" onclick="restorePhoto(${item.id})">恢复</button>
-                            <button class="btn-perm-delete" onclick="permanentDelete(${item.id})">永久删除</button>
+                            <button class="btn-restore" onclick="restorePhoto(${item.id})">${t('action.restore')}</button>
+                            <button class="btn-perm-delete" onclick="permanentDelete(${item.id})">${t('action.permDelete')}</button>
                         </div>
                     `;
                     
@@ -167,7 +168,7 @@
         }
         
         async function restorePhoto(id) {
-            if (!confirm('确定要恢复这张照片吗？')) return;
+            if (!confirm(t('dialog.restoreConfirm'))) return;
             
             try {
                 const response = await fetch(`/api/trash/${id}/restore`, { method: 'POST' });
@@ -180,12 +181,12 @@
                     }
                 }
             } catch (err) {
-                alert('恢复失败');
+                alert(t('dialog.restoreFailed'));
             }
         }
         
         async function permanentDelete(id) {
-            if (!confirm('确定要永久删除这张照片吗？\n此操作不可恢复！')) return;
+            if (!confirm(t('dialog.permDeleteConfirm'))) return;
             
             try {
                 const response = await fetch(`/api/trash/${id}/permanent_delete`, { method: 'POST' });
@@ -197,10 +198,11 @@
                     }
                 }
             } catch (err) {
-                alert('删除失败');
+                alert(t('dialog.permDeleteFailed'));
             }
         }
         
+        initI18n();
         loadTrash();
     </script>
 </body>
