@@ -5,6 +5,7 @@ import sqlite3
 import hashlib
 import shutil
 import subprocess
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, render_template, send_file, jsonify, request
@@ -16,17 +17,34 @@ pillow_heif.register_heif_opener()
 
 app = Flask(__name__)
 
-PHOTOS_LIBRARY = "/Users/tetsuya/Development/nas_album/Photos Library.photoslibrary/originals"
-DB_PATH = "/Users/tetsuya/Development/nas_album/photos.db"
-THUMBNAIL_DIR = Path("/Users/tetsuya/Development/nas_album/static/thumbnails")
-THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
+# 全局扫描状态变量
+scan_status = {
+    'is_scanning': False,
+    'scanned_count': 0,
+    'total_count': 0,
+}
+scan_lock = threading.Lock()
 
-TRASH_DIR = Path("/Users/tetsuya/Development/nas_album/trash")
-TRASH_DIR.mkdir(parents=True, exist_ok=True)
-TRASH_RETENTION_DAYS = 30
+# 导入配置文件
+from config import (
+    PHOTO_LIBRARY_PATHS,
+    DEFAULT_PORT,
+    DEBUG,
+    THUMBNAIL_MAX_SIZE,
+    THUMBNAIL_QUALITY,
+    VIDEO_THUMBNAIL_TIME,
+    TRASH_RETENTION_DAYS,
+    DB_PATH,
+    STATIC_DIR,
+    THUMBNAIL_DIR,
+    CONVERTED_DIR,
+    TRASH_DIR,
+)
 
-CONVERTED_DIR = Path("/Users/tetsuya/Development/nas_album/static/converted")
-CONVERTED_DIR.mkdir(parents=True, exist_ok=True)
+# 确保目录存在
+Path(THUMBNAIL_DIR).mkdir(parents=True, exist_ok=True)
+Path(CONVERTED_DIR).mkdir(parents=True, exist_ok=True)
+Path(TRASH_DIR).mkdir(parents=True, exist_ok=True)
 
 PHOTO_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.heic', '.gif', '.webp'}
 VIDEO_EXTENSIONS = {'.mov', '.mp4', '.avi', '.mkv', '.wmv', '.flv', '.m4v', '.3gp'}
@@ -41,22 +59,26 @@ def get_db():
 
 def init_db():
     conn = get_db()
+    conn.execute('PRAGMA journal_mode=WAL')
     conn.execute('''
         CREATE TABLE IF NOT EXISTS photos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             path TEXT UNIQUE NOT NULL,
             filename TEXT NOT NULL,
             media_type TEXT DEFAULT 'image',
+            source_path TEXT,
             date_taken TIMESTAMP,
             width INTEGER,
             height INTEGER,
             thumbnail_path TEXT,
             file_size INTEGER,
             duration INTEGER,
+            favorite INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     conn.execute('CREATE INDEX IF NOT EXISTS idx_date ON photos(date_taken)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_source ON photos(source_path)')
     
     conn.execute('''
         CREATE TABLE IF NOT EXISTS trash (
@@ -67,6 +89,22 @@ def init_db():
             filename TEXT NOT NULL,
             deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             restored INTEGER DEFAULT 0
+        )
+    ''')
+    
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS albums (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS album_photos (
+            album_id INTEGER,
+            photo_id INTEGER,
+            PRIMARY KEY (album_id, photo_id)
         )
     ''')
     conn.commit()
@@ -115,25 +153,25 @@ def get_file_creation_date(path):
         return datetime.fromtimestamp(stat.st_mtime)
 
 
-def generate_thumbnail(image_path, thumb_path, max_size=400):
+def generate_thumbnail(image_path, thumb_path, max_size=THUMBNAIL_MAX_SIZE):
     try:
         with Image.open(image_path) as img:
             img.thumbnail((max_size, max_size), Image.LANCZOS)
             if img.mode in ('RGBA', 'P'):
                 img = img.convert('RGB')
-            img.save(thumb_path, 'JPEG', quality=85)
+            img.save(thumb_path, 'JPEG', quality=THUMBNAIL_QUALITY)
             return img.width, img.height
     except Exception as e:
         print(f"缩略图生成失败 {image_path}: {e}")
         return None, None
 
 
-def generate_video_thumbnail(video_path, thumb_path, max_size=400):
+def generate_video_thumbnail(video_path, thumb_path, max_size=THUMBNAIL_MAX_SIZE):
     """用 ffmpeg 提取视频第一帧作为缩略图"""
     try:
         cmd = [
             'ffmpeg', '-y', '-i', video_path,
-            '-ss', '00:00:01',
+            '-ss', VIDEO_THUMBNAIL_TIME,
             '-vframes', '1',
             '-vf', f'scale={max_size}:{max_size}:force_original_aspect_ratio=decrease',
             '-q:v', '2',
@@ -189,64 +227,102 @@ def compute_image_hash(image_path):
 
 
 def scan_photos():
-    conn = get_db()
-    existing_paths = {row['path'] for row in conn.execute('SELECT path FROM photos')}
-    
-    media_files = []
-    for root, dirs, files in os.walk(PHOTOS_LIBRARY):
-        for filename in files:
-            ext = Path(filename).suffix.lower()
-            if ext in ALL_EXTENSIONS:
-                full_path = os.path.join(root, filename)
-                media_files.append((full_path, ext))
-    
-    print(f"找到 {len(media_files)} 个媒体文件")
-    
-    added = 0
-    for i, (full_path, ext) in enumerate(media_files):
-        if full_path in existing_paths:
-            continue
-        
-        is_video = ext in VIDEO_EXTENSIONS
-        media_type = 'video' if is_video else 'image'
-        
-        date_taken = None
-        if not is_video:
-            date_taken = extract_date_from_exif(full_path)
-        if not date_taken:
-            date_taken = get_file_creation_date(full_path)
-        
-        thumb_filename = f'{i}.jpg'
-        thumb_path = THUMBNAIL_DIR / thumb_filename
-        
-        if is_video:
-            width, height = generate_video_thumbnail(full_path, thumb_path)
-            duration = get_video_duration(full_path)
-        else:
-            width, height = generate_thumbnail(full_path, thumb_path)
-            duration = None
-        
-        if width is None:
-            continue
-        
-        file_size = os.path.getsize(full_path)
-        
-        try:
-            conn.execute('''
-                INSERT INTO photos (path, filename, media_type, date_taken, width, height, thumbnail_path, file_size, duration)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (full_path, Path(full_path).name, media_type, date_taken, width, height, str(thumb_path), file_size, duration))
-            added += 1
-        except sqlite3.IntegrityError:
-            pass
-        
-        if (i + 1) % 50 == 0:
-            conn.commit()
-    
-    conn.commit()
-    conn.close()
-    print(f"新增 {added} 个媒体文件")
-    return added
+    global scan_status
+    with scan_lock:
+        if scan_status['is_scanning']:
+            print("扫描已在进行中，跳过")
+            return 0
+        scan_status['is_scanning'] = True
+        scan_status['scanned_count'] = 0
+        scan_status['total_count'] = 0
+
+    try:
+        conn = get_db()
+        existing_paths = {row['path'] for row in conn.execute('SELECT path FROM photos')}
+
+        media_files = []
+        for lib_path in PHOTO_LIBRARY_PATHS:
+            if not os.path.exists(lib_path):
+                print(f"路径不存在，跳过: {lib_path}")
+                continue
+            for root, dirs, files in os.walk(lib_path):
+                for filename in files:
+                    ext = Path(filename).suffix.lower()
+                    if ext in ALL_EXTENSIONS:
+                        full_path = os.path.join(root, filename)
+                        media_files.append((full_path, ext, lib_path))
+
+        total = len(media_files)
+        with scan_lock:
+            scan_status['total_count'] = total
+
+        print(f"找到 {total} 个媒体文件")
+
+        added = 0
+        for i, (full_path, ext, source_path) in enumerate(media_files):
+            with scan_lock:
+                scan_status['scanned_count'] = i + 1
+
+            if full_path in existing_paths:
+                continue
+
+            is_video = ext in VIDEO_EXTENSIONS
+            media_type = 'video' if is_video else 'image'
+
+            date_taken = None
+            if not is_video:
+                date_taken = extract_date_from_exif(full_path)
+            if not date_taken:
+                date_taken = get_file_creation_date(full_path)
+
+            thumb_filename = f'{hashlib.md5(full_path.encode()).hexdigest()}.jpg'
+            thumb_path = Path(THUMBNAIL_DIR) / thumb_filename
+
+            if is_video:
+                width, height = generate_video_thumbnail(full_path, thumb_path)
+                duration = get_video_duration(full_path)
+            else:
+                width, height = generate_thumbnail(full_path, thumb_path)
+                duration = None
+
+            if width is None:
+                continue
+
+            file_size = os.path.getsize(full_path)
+
+            try:
+                conn.execute('''
+                    INSERT INTO photos (path, filename, media_type, source_path, date_taken, width, height, thumbnail_path, file_size, duration)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (full_path, Path(full_path).name, media_type, source_path, date_taken, width, height, str(thumb_path), file_size, duration))
+                added += 1
+            except sqlite3.IntegrityError:
+                pass
+
+            if (i + 1) % 50 == 0:
+                conn.commit()
+
+        conn.commit()
+        conn.close()
+        print(f"新增 {added} 个媒体文件")
+        return added
+    finally:
+        with scan_lock:
+            scan_status['is_scanning'] = False
+
+
+@app.route('/api/status')
+def get_status():
+    with scan_lock:
+        total = scan_status['total_count']
+        scanned = scan_status['scanned_count']
+        progress = round((scanned / total * 100), 1) if total > 0 else 0.0
+        return jsonify({
+            'scanning': scan_status['is_scanning'],
+            'scanned': scanned,
+            'total': total,
+            'progress_percent': progress
+        })
 
 
 @app.route('/')
@@ -259,44 +335,56 @@ def trash_page():
     return render_template('trash.html')
 
 
+def photo_row_to_dict(p):
+    ext = Path(p['filename']).suffix.lower().lstrip('.')
+    item = {
+        'id': p['id'],
+        'path': p['path'],
+        'filename': p['filename'],
+        'media_type': p['media_type'],
+        'format': ext.upper(),
+        'date_taken': p['date_taken'],
+        'width': p['width'],
+        'height': p['height'],
+        'thumbnail_url': f'/thumbnail/{p["id"]}',
+        'original_url': f'/photo/{p["id"]}',
+        'file_size': p['file_size'],
+        'favorite': bool(p['favorite']) if 'favorite' in p.keys() else False
+    }
+    if p['duration']:
+        item['duration'] = format_duration(p['duration'])
+    return item
+
+
 @app.route('/api/photos')
 def get_photos():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('per_page', 50, type=int)
+    source = request.args.get('source', '', type=str)
     per_page = min(per_page, 200)
     offset = (page - 1) * per_page
     
     conn = get_db()
-    total = conn.execute('SELECT COUNT(*) FROM photos WHERE width IS NOT NULL').fetchone()[0]
     
-    photos = conn.execute('''
-        SELECT id, path, filename, media_type, date_taken, width, height, thumbnail_path, file_size, duration
+    where_clause = 'WHERE width IS NOT NULL'
+    params = []
+    if source:
+        where_clause += ' AND source_path = ?'
+        params.append(source)
+    
+    total = conn.execute(f'SELECT COUNT(*) FROM photos {where_clause}', params).fetchone()[0]
+    
+    query = f'''
+        SELECT id, path, filename, media_type, source_path, date_taken, width, height, thumbnail_path, file_size, duration, favorite
         FROM photos 
-        WHERE width IS NOT NULL
+        {where_clause}
         ORDER BY date_taken DESC
         LIMIT ? OFFSET ?
-    ''', (per_page, offset)).fetchall()
+    '''
+    photos = conn.execute(query, params + [per_page, offset]).fetchall()
     conn.close()
     
-    result = []
-    for p in photos:
-        ext = Path(p['filename']).suffix.lower().lstrip('.')
-        item = {
-            'id': p['id'],
-            'path': p['path'],
-            'filename': p['filename'],
-            'media_type': p['media_type'],
-            'format': ext.upper(),
-            'date_taken': p['date_taken'],
-            'width': p['width'],
-            'height': p['height'],
-            'thumbnail_url': f'/thumbnail/{p["id"]}',
-            'original_url': f'/photo/{p["id"]}',
-            'file_size': p['file_size']
-        }
-        if p['duration']:
-            item['duration'] = format_duration(p['duration'])
-        result.append(item)
+    result = [photo_row_to_dict(p) for p in photos]
     
     return jsonify({
         'photos': result,
@@ -333,7 +421,7 @@ def original_photo(photo_id):
     
     # HEIC 转 JPEG
     if ext == '.heic':
-        converted_path = CONVERTED_DIR / f'{photo_id}.jpg'
+        converted_path = Path(CONVERTED_DIR) / f'{photo_id}.jpg'
         if not os.path.exists(converted_path):
             try:
                 with Image.open(photo['path']) as img:
@@ -357,7 +445,7 @@ def delete_photo(photo_id):
     
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     trash_filename = f"{timestamp}_{photo['filename']}"
-    trash_path = TRASH_DIR / trash_filename
+    trash_path = Path(TRASH_DIR) / trash_filename
     
     try:
         shutil.copy2(photo['path'], trash_path)
@@ -401,7 +489,7 @@ def batch_delete_photos():
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         trash_filename = f"{timestamp}_{photo['filename']}"
-        trash_path = TRASH_DIR / trash_filename
+        trash_path = Path(TRASH_DIR) / trash_filename
         
         try:
             shutil.copy2(photo['path'], trash_path)
@@ -546,9 +634,100 @@ def permanent_delete(trash_id):
         conn.close()
 
 
+@app.route('/api/stats')
+def get_stats():
+    conn = get_db()
+    total = conn.execute('SELECT COUNT(*) FROM photos WHERE width IS NOT NULL').fetchone()[0]
+    photos = conn.execute('SELECT COUNT(*) FROM photos WHERE width IS NOT NULL AND media_type = "image"').fetchone()[0]
+    videos = conn.execute('SELECT COUNT(*) FROM photos WHERE width IS NOT NULL AND media_type = "video"').fetchone()[0]
+    favorites = conn.execute('SELECT COUNT(*) FROM photos WHERE width IS NOT NULL AND favorite = 1').fetchone()[0]
+    trash = conn.execute('SELECT COUNT(*) FROM trash WHERE restored = 0').fetchone()[0]
+    sources = conn.execute('SELECT COUNT(DISTINCT source_path) FROM photos WHERE width IS NOT NULL').fetchone()[0]
+    
+    oldest = conn.execute('SELECT date_taken FROM photos WHERE width IS NOT NULL ORDER BY date_taken ASC LIMIT 1').fetchone()
+    newest = conn.execute('SELECT date_taken FROM photos WHERE width IS NOT NULL ORDER BY date_taken DESC LIMIT 1').fetchone()
+    
+    db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+    conn.close()
+    
+    return jsonify({
+        'total': total,
+        'photos': photos,
+        'videos': videos,
+        'favorites': favorites,
+        'trash': trash,
+        'sources': sources,
+        'oldest': oldest['date_taken'] if oldest else None,
+        'newest': newest['date_taken'] if newest else None,
+        'db_size': db_size
+    })
+
+
+@app.route('/api/sources')
+def get_sources():
+    conn = get_db()
+    rows = conn.execute('''
+        SELECT source_path, COUNT(*) as count 
+        FROM photos 
+        WHERE width IS NOT NULL AND source_path IS NOT NULL
+        GROUP BY source_path
+        ORDER BY count DESC
+    ''').fetchall()
+    conn.close()
+    
+    result = []
+    for row in rows:
+        path = row['source_path'] or '未知'
+        name = os.path.basename(path) or path
+        result.append({
+            'path': path,
+            'name': name,
+            'count': row['count']
+        })
+    return jsonify(result)
+
+
+@app.route('/api/albums')
+def get_albums():
+    conn = get_db()
+    albums = conn.execute('''
+        SELECT a.id, a.name, COUNT(ap.photo_id) as count
+        FROM albums a
+        LEFT JOIN album_photos ap ON a.id = ap.album_id
+        GROUP BY a.id
+        ORDER BY a.created_at DESC
+    ''').fetchall()
+    conn.close()
+    
+    return jsonify([{
+        'id': a['id'],
+        'name': a['name'],
+        'count': a['count']
+    } for a in albums])
+
+
+@app.route('/api/albums/<int:album_id>/photos')
+def get_album_photos(album_id):
+    conn = get_db()
+    photos = conn.execute('''
+        SELECT p.id, p.path, p.filename, p.media_type, p.date_taken, p.width, p.height, p.thumbnail_path, p.file_size, p.duration, p.favorite
+        FROM photos p
+        JOIN album_photos ap ON p.id = ap.photo_id
+        WHERE ap.album_id = ? AND p.width IS NOT NULL
+        ORDER BY p.date_taken DESC
+    ''', (album_id,)).fetchall()
+    conn.close()
+    
+    return jsonify({
+        'photos': [photo_row_to_dict(p) for p in photos]
+    })
+
+
 if __name__ == '__main__':
     init_db()
-    scan_photos()
     clean_expired_trash()
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 5000
-    app.run(debug=True, port=port)
+    # 在后台线程中启动扫描，不阻塞 Flask 启动
+    scan_thread = threading.Thread(target=scan_photos, daemon=True)
+    scan_thread.start()
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
+    app.run(debug=DEBUG, port=port)

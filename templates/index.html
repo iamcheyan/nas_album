@@ -3,39 +3,139 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>照片时间线</title>
+    <title>NAS Album</title>
     <link rel="stylesheet" href="/static/css/style.css">
 </head>
 <body>
-    <header>
-        <h1>📷 照片时间线</h1>
-        <p id="stats">加载中...</p>
-        <div class="header-actions">
-            <button id="select-mode-btn" class="btn btn-secondary">选择</button>
-            <a href="/trash" class="btn btn-secondary">回收站</a>
-        </div>
-        <!-- 缩略图尺寸调节 -->
-        <div class="thumb-size-control">
-            <span class="thumb-size-icon">🔍</span>
-            <input type="range" id="thumb-size-slider" min="80" max="400" value="200" step="10">
-            <span id="thumb-size-value">200px</span>
-        </div>
-    </header>
+    <!-- 移动端汉堡菜单按钮 -->
+    <button id="sidebar-toggle" class="sidebar-toggle" aria-label="打开侧边栏">
+        <span></span><span></span><span></span>
+    </button>
 
-    <!-- 批量选择工具栏 -->
-    <div id="selection-bar" class="selection-bar">
-        <span id="selection-count">已选择 0 张</span>
-        <div class="selection-actions">
-            <button id="batch-delete-btn" class="btn btn-danger" disabled>删除</button>
-            <button id="cancel-selection-btn" class="btn btn-secondary">取消</button>
+    <!-- 侧边栏遮罩 -->
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
+
+    <div class="app-container">
+        <!-- 左侧边栏 -->
+        <aside id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <h2>📷 NAS Album</h2>
+            </div>
+
+            <nav class="sidebar-nav">
+                <!-- 图库分组 -->
+                <div class="sidebar-group">
+                    <div class="sidebar-group-title">图库</div>
+                    <ul class="sidebar-list">
+                        <li class="sidebar-item active" data-view="all">
+                            <span class="sidebar-icon">🖼️</span>
+                            <span class="sidebar-label">全部</span>
+                            <span class="sidebar-count" id="count-all"></span>
+                        </li>
+                        <li class="sidebar-item" data-view="photos">
+                            <span class="sidebar-icon">📷</span>
+                            <span class="sidebar-label">照片</span>
+                            <span class="sidebar-count" id="count-photos"></span>
+                        </li>
+                        <li class="sidebar-item" data-view="videos">
+                            <span class="sidebar-icon">🎬</span>
+                            <span class="sidebar-label">视频</span>
+                            <span class="sidebar-count" id="count-videos"></span>
+                        </li>
+                        <li class="sidebar-item" data-view="favorites">
+                            <span class="sidebar-icon">⭐</span>
+                            <span class="sidebar-label">收藏</span>
+                            <span class="sidebar-count" id="count-favorites"></span>
+                        </li>
+                        <li class="sidebar-item" data-view="recent">
+                            <span class="sidebar-icon">🕐</span>
+                            <span class="sidebar-label">最近添加</span>
+                        </li>
+                        <li class="sidebar-item" data-view="trash">
+                            <span class="sidebar-icon">🗑️</span>
+                            <span class="sidebar-label">最近删除</span>
+                            <span class="sidebar-count" id="count-trash"></span>
+                        </li>
+                    </ul>
+                </div>
+
+                <!-- 相册分组 -->
+                <div class="sidebar-group">
+                    <div class="sidebar-group-title">
+                        相册
+                        <button id="new-album-btn" class="sidebar-action-btn" title="新建相册">＋</button>
+                    </div>
+                    <ul class="sidebar-list" id="albums-list">
+                        <!-- 动态插入 -->
+                    </ul>
+                </div>
+
+                <!-- 来源分组 -->
+                <div class="sidebar-group">
+                    <div class="sidebar-group-title">来源</div>
+                    <ul class="sidebar-list" id="sources-list">
+                        <!-- 动态插入 -->
+                    </ul>
+                </div>
+            </nav>
+        </aside>
+
+        <!-- 主内容区 -->
+        <div class="main-area">
+            <!-- 顶部 Tab 栏 -->
+            <header class="top-bar">
+                <div class="top-tabs">
+                    <button class="top-tab active" data-tab="all">全部</button>
+                    <button class="top-tab" data-tab="years">年份</button>
+                    <button class="top-tab" data-tab="map">地图</button>
+                    <button class="top-tab" data-tab="dbinfo">数据库信息</button>
+                </div>
+                <div class="top-actions">
+                    <div class="search-box">
+                        <span class="search-icon">🔍</span>
+                        <input type="text" id="search-input" placeholder="搜索照片...">
+                    </div>
+                    <button id="settings-btn" class="icon-btn" title="设置">⚙️</button>
+                </div>
+            </header>
+
+            <!-- 批量选择工具栏 -->
+            <div id="selection-bar" class="selection-bar">
+                <span id="selection-count">已选择 0 张</span>
+                <div class="selection-actions">
+                    <button id="batch-delete-btn" class="btn btn-danger" disabled>删除</button>
+                    <button id="cancel-selection-btn" class="btn btn-secondary">取消</button>
+                </div>
+            </div>
+
+            <!-- 视图标题栏 -->
+            <div class="view-header">
+                <h1 id="view-title">全部照片</h1>
+                <div class="view-actions">
+                    <button id="select-mode-btn" class="btn btn-secondary">选择</button>
+                    <!-- 缩略图尺寸调节 -->
+                    <div class="thumb-size-control">
+                        <span class="thumb-size-icon">🔍</span>
+                        <input type="range" id="thumb-size-slider" min="80" max="400" value="200" step="10">
+                        <span id="thumb-size-value">200px</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 照片网格主区域 -->
+            <main id="timeline" class="timeline-main">
+                <!-- 照片将通过 JS 动态插入 -->
+            </main>
+
+            <div id="loading" class="loading">加载更多...</div>
+
+            <!-- 底部状态栏 -->
+            <footer class="status-bar">
+                <span id="status-text">共 0 个项目 | 选中 0 个</span>
+                <span id="scan-status"></span>
+            </footer>
         </div>
     </div>
-
-    <main id="timeline">
-        <!-- 照片将通过 JS 动态插入 -->
-    </main>
-
-    <div id="loading" class="loading">加载更多...</div>
 
     <!-- 灯箱 -->
     <div id="lightbox" class="lightbox hidden">
