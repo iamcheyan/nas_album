@@ -171,7 +171,10 @@
             <!-- 重复照片操作栏 -->
             <div id="duplicates-bar" class="duplicates-bar hidden">
                 <span id="duplicates-count">已标记 0 个文件待删除</span>
-                <button id="duplicates-delete-btn" class="btn btn-danger" data-i18n="duplicates.deleteMarked">删除标记项</button>
+                <div style="display:flex;gap:8px">
+                    <button id="duplicates-apply-default-btn" class="btn btn-secondary" data-i18n="duplicates.applyDefault" title="全部应用默认设置（保留质量最高的副本）">应用默认</button>
+                    <button id="duplicates-delete-btn" class="btn btn-danger" data-i18n="duplicates.deleteMarked">删除标记项</button>
+                </div>
             </div>
 
             <!-- 视图标题栏 -->

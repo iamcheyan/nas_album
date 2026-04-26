@@ -347,6 +347,8 @@ const I18N = {
         'duplicates.path': '路径',
         'duplicates.markedCount': '已标记 {0} 个文件待删除',
         'duplicates.deleteMarked': '删除标记项',
+        'duplicates.applyDefault': '应用默认',
+        'duplicates.defaultApplied': '已批量应用默认设置',
 
         // Photo Filter
         'filter.all': '全部',
@@ -707,6 +709,8 @@ const I18N = {
         'duplicates.path': 'Path',
         'duplicates.markedCount': '{0} files marked for deletion',
         'duplicates.deleteMarked': 'Delete Marked',
+        'duplicates.applyDefault': 'Apply Default',
+        'duplicates.defaultApplied': 'Default settings applied to all groups',
 
         // Photo Filter
         'filter.all': 'All',
@@ -1067,6 +1071,8 @@ const I18N = {
         'duplicates.path': 'パス',
         'duplicates.markedCount': '{0} ファイルを削除対象としてマーク',
         'duplicates.deleteMarked': 'マークした項目を削除',
+        'duplicates.applyDefault': 'デフォルトを適用',
+        'duplicates.defaultApplied': 'すべてのグループにデフォルト設定を適用しました',
 
         // Photo Filter
         'filter.all': 'すべて',

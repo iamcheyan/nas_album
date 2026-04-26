@@ -2741,6 +2741,27 @@ document.getElementById('batch-delete-btn').addEventListener('click', batchDelet
 // 重复照片删除按钮
 const dupDeleteBtn = document.getElementById('duplicates-delete-btn');
 if (dupDeleteBtn) dupDeleteBtn.addEventListener('click', deleteMarkedDuplicates);
+
+// 批量应用默认设置（每组保留质量最高的副本）
+const dupApplyDefaultBtn = document.getElementById('duplicates-apply-default-btn');
+if (dupApplyDefaultBtn) {
+    dupApplyDefaultBtn.addEventListener('click', () => {
+        document.querySelectorAll('.duplicate-group').forEach(group => {
+            const keepRadios = group.querySelectorAll('.duplicate-keep-radio');
+            keepRadios.forEach((radio, idx) => {
+                radio.checked = idx === 0;
+                const label = radio.closest('.duplicate-radio-label');
+                if (idx === 0) {
+                    label.classList.add('duplicate-keep-checked');
+                } else {
+                    label.classList.remove('duplicate-keep-checked');
+                }
+            });
+        });
+        updateDuplicatesBar();
+        showToast(t('duplicates.defaultApplied'));
+    });
+}
 // ========== 设置面板 ==========
 const settingsPanel = document.getElementById('settings-panel');
 const settingsClose = document.getElementById('settings-close');
