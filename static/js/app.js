@@ -189,6 +189,7 @@ function switchView(view) {
     } else {
         loadPhotos();
     }
+    updateDuplicatesBar();
     saveSession();
 }
 
@@ -981,6 +982,7 @@ async function loadDuplicates() {
         updateStatus(data.total_groups || 0, 0);
         duplicateHasMore = data.has_more;
         duplicatePage++;
+        updateDuplicatesBar();
     } catch (err) {
         console.error('Failed to load duplicates:', err);
     } finally {
