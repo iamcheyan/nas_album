@@ -2963,8 +2963,16 @@ function _setCleanupButtonsLoading(loading) {
 }
 
 async function startCleanup(buttonEl) {
-    const msg = t('duplicates.cleanupConfirm') || '确定一键清理重复照片吗？每组将只保留精度最高的一张，其余全部移到回收站。';
-    if (!confirm(msg)) return;
+    const confirmed = await showDialog({
+        type: 'confirm',
+        icon: '<svg width="32" height="32"><use href="#icon-alert"/></svg>',
+        title: t('duplicates.oneClickCleanup') || '一键清理',
+        message: t('duplicates.cleanupConfirm') || '确定一键清理重复照片吗？每组将只保留精度最高的一张，其余全部移到回收站。此操作不可撤销！',
+        confirmText: t('action.confirm'),
+        confirmClass: 'btn btn-danger',
+        cancelText: t('action.cancel')
+    });
+    if (!confirmed) return;
 
     // If triggered from view-header button, show duplicates-bar and scroll to top
     if (buttonEl.id === 'dup-cleanup-action-btn') {

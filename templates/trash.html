@@ -576,6 +576,243 @@
             }
         }
         
+        // Custom dialog / toast (inline for trash.html)
+        function showDialog(options) {
+            return new Promise((resolve) => {
+                let dialog = document.getElementById('trash-dialog');
+                if (!dialog) {
+                    dialog = document.createElement('div');
+                    dialog.id = 'trash-dialog';
+                    dialog.className = 'custom-dialog hidden';
+                    dialog.innerHTML = `
+                        <div class="dialog-overlay"></div>
+                        <div class="dialog-box">
+                            <div class="dialog-icon" id="trash-dialog-icon"><svg width="32" height="32"><use href="#icon-alert"/></svg></div>
+                            <h3 class="dialog-title" id="trash-dialog-title">提示</h3>
+                            <p class="dialog-message" id="trash-dialog-message"></p>
+                            <div class="dialog-actions" id="trash-dialog-actions"></div>
+                        </div>
+                    `;
+                    document.body.appendChild(dialog);
+                }
+                const icon = dialog.querySelector('#trash-dialog-icon');
+                const title = dialog.querySelector('#trash-dialog-title');
+                const message = dialog.querySelector('#trash-dialog-message');
+                const actions = dialog.querySelector('#trash-dialog-actions');
+
+                icon.innerHTML = options.icon || '<svg width="32" height="32"><use href="#icon-alert"/></svg>';
+                title.textContent = options.title || t('dialog.tip') || '提示';
+                message.innerHTML = options.message || '';
+
+                actions.innerHTML = '';
+                if (options.type === 'confirm') {
+                    const cancel = document.createElement('button');
+                    cancel.className = 'btn btn-secondary';
+                    cancel.textContent = options.cancelText || t('action.cancel') || '取消';
+                    cancel.onclick = () => { dialog.classList.add('hidden'); resolve(false); };
+                    const ok = document.createElement('button');
+                    ok.className = options.confirmClass || 'btn btn-primary';
+                    ok.textContent = options.confirmText || t('action.confirm') || '确定';
+                    ok.onclick = () => { dialog.classList.add('hidden'); resolve(true); };
+                    actions.appendChild(cancel);
+                    actions.appendChild(ok);
+                } else {
+                    const ok = document.createElement('button');
+                    ok.className = 'btn btn-primary';
+                    ok.textContent = options.confirmText || t('action.confirm') || '确定';
+                    ok.onclick = () => { dialog.classList.add('hidden'); resolve(true); };
+                    actions.appendChild(ok);
+                }
+                dialog.classList.remove('hidden');
+            });
+        }
+
+        function showToast(message, duration = 2000) {
+            let toast = document.getElementById('trash-toast');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'trash-toast';
+                toast.className = 'toast hidden';
+                toast.innerHTML = '<span id="trash-toast-message"></span>';
+                document.body.appendChild(toast);
+            }
+            toast.querySelector('#trash-toast-message').textContent = message;
+            toast.classList.remove('hidden');
+            setTimeout(() => toast.classList.add('hidden'), duration);
+        }
+
+        // Replace native confirm/alert in trash functions
+        async function restorePhoto(id) {
+            const confirmed = await showDialog({
+                type: 'confirm',
+                title: t('dialog.restoreConfirmTitle') || t('dialog.tip'),
+                message: t('dialog.restoreConfirm'),
+                confirmText: t('action.confirm'),
+                cancelText: t('action.cancel')
+            });
+            if (!confirmed) return;
+
+            try {
+                const response = await fetch(`/api/trash/${id}/restore`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    const el = document.querySelector(`.trash-item[data-id="${id}"]`);
+                    if (el) el.remove();
+                    if (document.querySelectorAll('.trash-item, .dup-group-card').length === 0) {
+                        loadTrash();
+                    }
+                }
+            } catch (err) {
+                showToast(t('dialog.restoreFailed'));
+            }
+        }
+
+        async function restoreDupGroup(groupId) {
+            const confirmed = await showDialog({
+                type: 'confirm',
+                title: t('dialog.tip'),
+                message: t('trash.restoreGroupConfirm'),
+                confirmText: t('action.confirm'),
+                cancelText: t('action.cancel')
+            });
+            if (!confirmed) return;
+
+            const card = document.querySelector(`.dup-group-card[data-group-id="${groupId}"]`);
+            const items = card ? card.querySelectorAll('.dup-thumb') : [];
+
+            for (const thumb of items) {
+                const id = thumb.dataset.id;
+                try {
+                    await fetch(`/api/trash/${id}/restore`, { method: 'POST' });
+                } catch (e) {
+                    console.error('Restore failed for', id, e);
+                }
+            }
+
+            if (card) card.remove();
+            if (document.querySelectorAll('.trash-item, .dup-group-card').length === 0) {
+                loadTrash();
+            }
+        }
+
+        async function deleteDupGroup(groupId) {
+            const confirmed = await showDialog({
+                type: 'confirm',
+                title: t('dialog.tip'),
+                message: t('trash.deleteGroupConfirm'),
+                confirmText: t('action.delete'),
+                confirmClass: 'btn btn-danger',
+                cancelText: t('action.cancel')
+            });
+            if (!confirmed) return;
+
+            const card = document.querySelector(`.dup-group-card[data-group-id="${groupId}"]`);
+            const items = card ? card.querySelectorAll('.dup-thumb') : [];
+
+            for (const thumb of items) {
+                const id = thumb.dataset.id;
+                try {
+                    await fetch(`/api/trash/${id}/permanent_delete`, { method: 'POST' });
+                } catch (e) {
+                    console.error('Delete failed for', id, e);
+                }
+            }
+
+            if (card) card.remove();
+            if (document.querySelectorAll('.trash-item, .dup-group-card').length === 0) {
+                loadTrash();
+            }
+        }
+
+        async function restoreAll() {
+            const confirmed = await showDialog({
+                type: 'confirm',
+                title: t('dialog.tip'),
+                message: t('trash.restoreAllConfirm'),
+                confirmText: t('action.confirm'),
+                cancelText: t('action.cancel')
+            });
+            if (!confirmed) return;
+
+            const btn = document.getElementById('restore-all-btn');
+            btn.disabled = true;
+            btn.querySelector('span').textContent = t('trash.restoring') || '还原中...';
+
+            try {
+                const response = await fetch('/api/trash/restore_all', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    showToast(data.message);
+                    loadTrash();
+                } else {
+                    showToast(data.message || '还原失败');
+                }
+            } catch (err) {
+                showToast(t('trash.restoreAllFailed') || '全部还原失败');
+            } finally {
+                btn.disabled = false;
+                btn.querySelector('span').textContent = t('trash.restoreAll');
+            }
+        }
+
+        async function deleteAll() {
+            const confirmed = await showDialog({
+                type: 'confirm',
+                title: t('dialog.tip'),
+                message: t('trash.deleteAllConfirm'),
+                confirmText: t('action.delete'),
+                confirmClass: 'btn btn-danger',
+                cancelText: t('action.cancel')
+            });
+            if (!confirmed) return;
+
+            const btn = document.getElementById('delete-all-btn');
+            btn.disabled = true;
+            btn.querySelector('span').textContent = t('trash.deleting') || '删除中...';
+
+            try {
+                const response = await fetch('/api/trash/delete_all', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    showToast(data.message);
+                    loadTrash();
+                } else {
+                    showToast(data.message || '删除失败');
+                }
+            } catch (err) {
+                showToast('删除失败');
+            } finally {
+                btn.disabled = false;
+                btn.querySelector('span').textContent = t('trash.deleteAll');
+            }
+        }
+
+        async function permanentDelete(id) {
+            const confirmed = await showDialog({
+                type: 'confirm',
+                title: t('dialog.tip'),
+                message: t('dialog.permDeleteConfirm'),
+                confirmText: t('action.delete'),
+                confirmClass: 'btn btn-danger',
+                cancelText: t('action.cancel')
+            });
+            if (!confirmed) return;
+
+            try {
+                const response = await fetch(`/api/trash/${id}/permanent_delete`, { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    const el = document.querySelector(`.trash-item[data-id="${id}"]`);
+                    if (el) el.remove();
+                    if (document.querySelectorAll('.trash-item, .dup-group-card').length === 0) {
+                        loadTrash();
+                    }
+                }
+            } catch (err) {
+                showToast(t('dialog.permDeleteFailed'));
+            }
+        }
+
         initI18n();
         loadTrash();
     </script>
