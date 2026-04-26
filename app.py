@@ -2891,6 +2891,48 @@ def get_map_photos():
     })
 
 
+@app.route('/api/disk_usage')
+def get_disk_usage():
+    """返回照片库所在磁盘的使用情况"""
+    import shutil
+    try:
+        # Use the first enabled library path to determine the disk
+        conn = get_db()
+        enabled_paths = [row['path'] for row in conn.execute(
+            'SELECT path FROM library_paths WHERE enabled = 1'
+        ).fetchall()]
+        conn.close()
+
+        target_path = enabled_paths[0] if enabled_paths else '/'
+        if not os.path.exists(target_path):
+            target_path = '/'
+
+        usage = shutil.disk_usage(target_path)
+        total = usage.total
+        used = usage.used
+        free = usage.free
+        percent = round((used / total) * 100, 1) if total > 0 else 0
+
+        def _fmt(bytes_val):
+            for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
+                if bytes_val < 1024.0:
+                    return f"{bytes_val:.1f} {unit}"
+                bytes_val /= 1024.0
+            return f"{bytes_val:.1f} PB"
+
+        return jsonify({
+            'total': total,
+            'used': used,
+            'free': free,
+            'percent': percent,
+            'total_formatted': _fmt(total),
+            'used_formatted': _fmt(used),
+            'free_formatted': _fmt(free),
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 def kill_port_process(port):
     """查找并杀掉占用指定端口的进程"""
     try:

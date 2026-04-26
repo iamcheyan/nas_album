@@ -2458,6 +2458,32 @@ async function loadStats() {
     }
 }
 
+async function loadDiskUsage() {
+    try {
+        const res = await fetch('/api/disk_usage');
+        const data = await res.json();
+        if (data.error) return;
+
+        const container = document.getElementById('disk-usage');
+        const textEl = document.getElementById('disk-usage-text');
+        const fillEl = document.getElementById('disk-usage-fill');
+        if (!container || !textEl || !fillEl) return;
+
+        container.classList.remove('hidden');
+        textEl.textContent = `${data.used_formatted} / ${data.total_formatted}`;
+        fillEl.style.width = data.percent + '%';
+
+        fillEl.classList.remove('warning', 'danger');
+        if (data.percent >= 90) {
+            fillEl.classList.add('danger');
+        } else if (data.percent >= 75) {
+            fillEl.classList.add('warning');
+        }
+    } catch (e) {
+        console.error('Load disk usage failed:', e);
+    }
+}
+
 async function loadSources() {
     try {
         const response = await fetch('/api/sources');
@@ -3495,6 +3521,7 @@ async function init() {
     loadStats();
     loadSources();
     loadAlbums();
+    loadDiskUsage();
 
     // 照片类型筛选下拉框
     const photoFilterSelect = document.getElementById('photo-filter-type');

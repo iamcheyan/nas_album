@@ -100,6 +100,51 @@ body {
 .sidebar-nav {
     flex: 1;
     padding: 8px 0;
+    overflow-y: auto;
+}
+
+.disk-usage {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border);
+    margin-top: auto;
+}
+.disk-usage.hidden {
+    display: none;
+}
+.disk-usage-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 13px;
+}
+.disk-usage-label {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+.disk-usage-text {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+.disk-usage-bar {
+    height: 6px;
+    background: var(--bg-hover);
+    border-radius: 3px;
+    overflow: hidden;
+    position: relative;
+}
+.disk-usage-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, #3b82f6, #22c55e);
+    transition: width 0.5s ease;
+    width: 0%;
+}
+.disk-usage-fill.warning {
+    background: linear-gradient(90deg, #f59e0b, #ef4444);
+}
+.disk-usage-fill.danger {
+    background: linear-gradient(90deg, #ef4444, #dc2626);
 }
 
 .sidebar-group {
