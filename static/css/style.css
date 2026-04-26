@@ -22,6 +22,10 @@
     --border: #2a2a2a;
     --radius: 8px;
     --radius-sm: 6px;
+    --scrollbar-track: transparent;
+    --scrollbar-thumb: rgba(255,255,255,0.12);
+    --scrollbar-thumb-hover: rgba(255,255,255,0.22);
+    --scrollbar-width: 6px;
 }
 
 html, body {
@@ -64,13 +68,57 @@ body {
     z-index: 300;
 }
 
-.sidebar::-webkit-scrollbar {
+/* ========== 统一滚动条样式 ========== */
+.sidebar,
+.timeline-main,
+.viewer-exif,
+.settings-content,
+.dialog-body {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+.sidebar::-webkit-scrollbar,
+.viewer-exif::-webkit-scrollbar {
     width: 4px;
 }
 
-.sidebar::-webkit-scrollbar-thumb {
-    background: #333;
-    border-radius: 2px;
+.timeline-main::-webkit-scrollbar,
+.settings-content::-webkit-scrollbar,
+.dialog-body::-webkit-scrollbar {
+    width: var(--scrollbar-width);
+}
+
+.viewer-filmstrip::-webkit-scrollbar {
+    height: var(--scrollbar-width);
+}
+
+.sidebar::-webkit-scrollbar-track,
+.timeline-main::-webkit-scrollbar-track,
+.viewer-exif::-webkit-scrollbar-track,
+.viewer-filmstrip::-webkit-scrollbar-track,
+.settings-content::-webkit-scrollbar-track,
+.dialog-body::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+}
+
+.sidebar::-webkit-scrollbar-thumb,
+.timeline-main::-webkit-scrollbar-thumb,
+.viewer-exif::-webkit-scrollbar-thumb,
+.viewer-filmstrip::-webkit-scrollbar-thumb,
+.settings-content::-webkit-scrollbar-thumb,
+.dialog-body::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: calc(var(--scrollbar-width) / 2);
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover,
+.timeline-main::-webkit-scrollbar-thumb:hover,
+.viewer-exif::-webkit-scrollbar-thumb:hover,
+.viewer-filmstrip::-webkit-scrollbar-thumb:hover,
+.settings-content::-webkit-scrollbar-thumb:hover,
+.dialog-body::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
 }
 
 .sidebar-header {
@@ -603,23 +651,8 @@ body.selection-mode .timeline-main {
     overflow-x: hidden;
     padding: 0 20px 20px;
     position: relative;
-}
-
-.timeline-main::-webkit-scrollbar {
-    width: 8px;
-}
-
-.timeline-main::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.timeline-main::-webkit-scrollbar-thumb {
-    background: #333;
-    border-radius: 4px;
-}
-
-.timeline-main::-webkit-scrollbar-thumb:hover {
-    background: #444;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
 }
 
 /* 年份分组 */
@@ -636,6 +669,7 @@ body.selection-mode .timeline-main {
     position: relative;
     z-index: 1;
     padding-left: 4px;
+    animation: fadeInDown 0.3s ease;
 }
 
 .month-label {
@@ -645,6 +679,22 @@ body.selection-mode .timeline-main {
     position: relative;
     z-index: 1;
     padding-left: 4px;
+    animation: fadeInDown 0.25s ease;
+}
+
+.day-label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin: 12px 0 10px;
+    position: relative;
+    z-index: 1;
+    padding-left: 4px;
+    animation: fadeInDown 0.2s ease;
+}
+
+@keyframes fadeInDown {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 
 /* 照片网格 */
@@ -653,6 +703,8 @@ body.selection-mode .timeline-main {
     grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
     gap: 6px;
     margin-bottom: 16px;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 300px;
 }
 
 .photo-item {
@@ -735,6 +787,35 @@ body.selection-mode .photo-checkbox {
     object-fit: cover;
     display: block;
     pointer-events: none;
+}
+
+.photo-img-wrap {
+    position: absolute;
+    inset: 0;
+}
+
+.photo-img-wrap img {
+    position: absolute;
+    inset: 0;
+}
+
+.photo-img-placeholder {
+    filter: blur(12px) saturate(1.2);
+    transform: scale(1.05);
+    transition: opacity 0.4s ease;
+}
+
+.photo-img-real {
+    opacity: 0;
+    transition: opacity 0.4s ease;
+}
+
+.photo-img-real.loaded {
+    opacity: 1;
+}
+
+.photo-img-real.loaded ~ .photo-img-placeholder {
+    opacity: 0;
 }
 
 .photo-item .photo-date {
@@ -1006,15 +1087,6 @@ body.selection-mode .photo-checkbox {
     padding: 12px 16px;
 }
 
-.viewer-exif::-webkit-scrollbar {
-    width: 4px;
-}
-
-.viewer-exif::-webkit-scrollbar-thumb {
-    background: #333;
-    border-radius: 2px;
-}
-
 .exif-loading {
     color: var(--text-muted);
     font-size: 0.85rem;
@@ -1133,19 +1205,6 @@ a.exif-value:hover {
     padding: 8px 12px;
     overflow-x: auto;
     overflow-y: hidden;
-}
-
-.viewer-filmstrip::-webkit-scrollbar {
-    height: 6px;
-}
-
-.viewer-filmstrip::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.viewer-filmstrip::-webkit-scrollbar-thumb {
-    background: #333;
-    border-radius: 3px;
 }
 
 .filmstrip-inner {
@@ -1647,16 +1706,6 @@ a.exif-value:hover {
 /* Month chevron rotation when expanded */
 .timeline-month.expanded .timeline-chevron {
     transform: rotate(90deg);
-}
-
-/* ========== 照片网格 - 日期标签 ========== */
-.day-label {
-    font-size: 0.9rem;
-    color: var(--text-secondary);
-    margin: 12px 0 10px;
-    position: relative;
-    z-index: 1;
-    padding-left: 4px;
 }
 
 /* ========== 年份视图 ========== */

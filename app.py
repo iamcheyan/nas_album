@@ -9,6 +9,8 @@ import threading
 import time
 import re
 import signal
+import base64
+import io
 from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, render_template, send_file, jsonify, request
@@ -139,7 +141,9 @@ def init_db():
         conn.execute('ALTER TABLE photos ADD COLUMN is_screenshot INTEGER DEFAULT 0')
     if 'hidden' not in existing_cols:
         conn.execute('ALTER TABLE photos ADD COLUMN hidden INTEGER DEFAULT 0')
-    
+    if 'blur_data' not in existing_cols:
+        conn.execute('ALTER TABLE photos ADD COLUMN blur_data TEXT')
+
     # Migrate: add thumbnail_path to trash table if not exists
     trash_cols = {row['name'] for row in conn.execute("PRAGMA table_info(trash)")}
     if 'thumbnail_path' not in trash_cols:
@@ -468,22 +472,38 @@ def get_file_creation_date(path):
         return now
 
 
+def make_blur_data(image_path, max_size=32):
+    """从已有图片生成微型 base64 blur 占位图"""
+    try:
+        with Image.open(image_path) as img:
+            img.thumbnail((max_size, max_size), Image.LANCZOS)
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, 'JPEG', quality=30)
+            return base64.b64encode(buf.getvalue()).decode('utf-8')
+    except Exception:
+        return None
+
+
 def generate_thumbnail(image_path, thumb_path, max_size=THUMBNAIL_MAX_SIZE):
-    """生成图片缩略图。如果文件实际是视频（如小米 Motion Photo），回退到 ffmpeg 提取帧。"""
+    """生成图片缩略图。如果文件实际是视频（如小米 Motion Photo），回退到 ffmpeg 提取帧。
+    返回 (width, height, blur_data)"""
     try:
         with Image.open(image_path) as img:
             img.thumbnail((max_size, max_size), Image.LANCZOS)
             if img.mode in ('RGBA', 'P'):
                 img = img.convert('RGB')
             img.save(thumb_path, 'JPEG', quality=THUMBNAIL_QUALITY)
-            return img.width, img.height
+            blur = make_blur_data(str(thumb_path))
+            return img.width, img.height, blur
     except Exception:
         # 可能是 Motion Photo 等伪装成 JPG 的视频文件，尝试用 ffmpeg
         return generate_video_thumbnail(image_path, thumb_path, max_size)
 
 
 def generate_video_thumbnail(video_path, thumb_path, max_size=THUMBNAIL_MAX_SIZE):
-    """用 ffmpeg 提取视频第一帧作为缩略图"""
+    """用 ffmpeg 提取视频第一帧作为缩略图。返回 (width, height, blur_data)"""
     try:
         cmd = [
             'ffmpeg', '-y', '-i', video_path,
@@ -496,11 +516,12 @@ def generate_video_thumbnail(video_path, thumb_path, max_size=THUMBNAIL_MAX_SIZE
         result = subprocess.run(cmd, capture_output=True, timeout=30)
         if result.returncode == 0 and os.path.exists(thumb_path):
             with Image.open(thumb_path) as img:
-                return img.width, img.height
-        return None, None
+                blur = make_blur_data(str(thumb_path))
+                return img.width, img.height, blur
+        return None, None, None
     except Exception as e:
         print(f"视频缩略图失败 {video_path}: {e}")
-        return None, None
+        return None, None, None
 
 
 def get_video_duration(video_path):
@@ -936,12 +957,12 @@ def scan_photos_fast():
 def generate_missing_thumbnails():
     """为数据库中没有缩略图的记录生成缩略图"""
     conn = get_db()
-    # 获取需要生成缩略图的文件（thumbnail_path 存在但文件不存在）
+    # 获取需要生成缩略图或 blur_data 的文件
     rows = conn.execute('''
-        SELECT id, path, filename, media_type, thumbnail_path 
-        FROM photos 
-        WHERE thumbnail_path IS NOT NULL 
-        AND (width IS NULL OR width = 0)
+        SELECT id, path, filename, media_type, thumbnail_path
+        FROM photos
+        WHERE thumbnail_path IS NOT NULL
+        AND ((width IS NULL OR width = 0) OR blur_data IS NULL)
     ''').fetchall()
     
     total_missing = len(rows)
@@ -950,31 +971,32 @@ def generate_missing_thumbnails():
     generated = 0
     for i, row in enumerate(rows):
         thumb_path = Path(row['thumbnail_path'])
-        
-        # 如果缩略图已存在，只更新尺寸
+
+        # 如果缩略图已存在，只更新尺寸和 blur_data
         if thumb_path.exists():
             try:
                 with Image.open(thumb_path) as img:
+                    blur = make_blur_data(str(thumb_path))
                     conn.execute(
-                        'UPDATE photos SET width=?, height=? WHERE id=?',
-                        (img.width, img.height, row['id'])
+                        'UPDATE photos SET width=?, height=?, blur_data=? WHERE id=?',
+                        (img.width, img.height, blur, row['id'])
                     )
                 generated += 1
                 continue
             except Exception:
                 pass
-        
+
         # 生成缩略图
         is_video = row['media_type'] == 'video'
         if is_video:
-            width, height = generate_video_thumbnail(row['path'], thumb_path)
+            width, height, blur = generate_video_thumbnail(row['path'], thumb_path)
         else:
-            width, height = generate_thumbnail(row['path'], thumb_path)
-        
+            width, height, blur = generate_thumbnail(row['path'], thumb_path)
+
         if width:
             conn.execute(
-                'UPDATE photos SET width=?, height=? WHERE id=?',
-                (width, height, row['id'])
+                'UPDATE photos SET width=?, height=?, blur_data=? WHERE id=?',
+                (width, height, blur, row['id'])
             )
             generated += 1
         
@@ -999,19 +1021,19 @@ def ensure_thumbnail(photo_id, photo_path, media_type, thumb_path):
     thumb_path = Path(thumb_path)
     if thumb_path.exists():
         return True
-    
+
     try:
         if media_type == 'video':
-            width, height = generate_video_thumbnail(photo_path, thumb_path)
+            width, height, blur = generate_video_thumbnail(photo_path, thumb_path)
         else:
-            width, height = generate_thumbnail(photo_path, thumb_path)
-        
+            width, height, blur = generate_thumbnail(photo_path, thumb_path)
+
         if width:
-            # 更新数据库中的尺寸
+            # 更新数据库中的尺寸和 blur_data
             conn = get_db()
             conn.execute(
-                'UPDATE photos SET width=?, height=? WHERE id=?',
-                (width, height, photo_id)
+                'UPDATE photos SET width=?, height=?, blur_data=? WHERE id=?',
+                (width, height, blur, photo_id)
             )
             conn.commit()
             conn.close()
@@ -1118,6 +1140,7 @@ def photo_row_to_dict(p):
         'width': p['width'],
         'height': p['height'],
         'thumbnail_url': f'/thumbnail/{p["id"]}',
+        'blur_url': f'data:image/jpeg;base64,{p["blur_data"]}' if p['blur_data'] else None,
         'original_url': f'/photo/{p["id"]}',
         'file_size': p['file_size'],
         'favorite': bool(p['favorite']) if 'favorite' in p.keys() else False,
@@ -1197,8 +1220,8 @@ def get_photos():
     total = conn.execute(f'SELECT COUNT(*) FROM photos {where_clause}', params).fetchone()[0]
     
     query = f'''
-        SELECT id, path, filename, media_type, source_path, date_taken, width, height, thumbnail_path, file_size, duration, favorite, latitude, longitude, hidden, is_screenshot
-        FROM photos 
+        SELECT id, path, filename, media_type, source_path, date_taken, width, height, thumbnail_path, file_size, duration, favorite, latitude, longitude, hidden, is_screenshot, blur_data
+        FROM photos
         {where_clause}
         ORDER BY date_taken DESC
         LIMIT ? OFFSET ?
@@ -1771,7 +1794,7 @@ def get_hidden_photos():
     """Return all hidden photos"""
     conn = get_db()
     photos = conn.execute('''
-        SELECT id, path, filename, media_type, source_path, date_taken, width, height, thumbnail_path, file_size, duration, favorite, latitude, longitude, hidden
+        SELECT id, path, filename, media_type, source_path, date_taken, width, height, thumbnail_path, file_size, duration, favorite, latitude, longitude, hidden, blur_data
         FROM photos
         WHERE hidden = 1
           AND (
@@ -1825,7 +1848,7 @@ def get_duplicates():
         filename = row['filename']
         file_size = row['file_size']
         photos = conn.execute('''
-            SELECT id, path, filename, media_type, source_path, thumbnail_path, file_size, width, height
+            SELECT id, path, filename, media_type, source_path, thumbnail_path, file_size, width, height, blur_data
             FROM photos
             WHERE filename = ? AND file_size = ? AND hidden = 0
               AND (
@@ -1834,7 +1857,7 @@ def get_duplicates():
               )
             ORDER BY (width * height) DESC
         ''', (filename, file_size)).fetchall()
-        
+
         photo_list = []
         for p in photos:
             photo_list.append({
@@ -1844,6 +1867,7 @@ def get_duplicates():
                 'media_type': p['media_type'],
                 'source_path': p['source_path'],
                 'thumbnail_url': f'/thumbnail/{p["id"]}',
+                'blur_url': f'data:image/jpeg;base64,{p["blur_data"]}' if p['blur_data'] else None,
                 'file_size': p['file_size'],
                 'width': p['width'],
                 'height': p['height']
@@ -2064,7 +2088,7 @@ def find_duplicates():
     conn = get_db()
     # 获取所有非隐藏照片（包括视频），排除禁用路径
     photos = conn.execute('''
-        SELECT id, path, filename, file_size, media_type, date_taken, width, height, thumbnail_path, duration
+        SELECT id, path, filename, file_size, media_type, date_taken, width, height, thumbnail_path, duration, blur_data
         FROM photos
         WHERE hidden = 0
           AND (
@@ -2098,6 +2122,7 @@ def find_duplicates():
                 'file_size': p['file_size'],
                 'media_type': p['media_type'],
                 'thumbnail_url': f'/thumbnail/{p["id"]}',
+                'blur_url': f'data:image/jpeg;base64,{p["blur_data"]}' if p['blur_data'] else None,
                 'date_taken': p['date_taken'],
                 'width': p['width'],
                 'height': p['height'],
@@ -2294,7 +2319,7 @@ def get_trash():
     for group in duplicate_groups.values():
         if group['kept_photo_id']:
             kept = conn.execute(
-                'SELECT id, path, filename, thumbnail_path FROM photos WHERE id = ?',
+                'SELECT id, path, filename, thumbnail_path, blur_data FROM photos WHERE id = ?',
                 (group['kept_photo_id'],)
             ).fetchone()
             if kept:
@@ -2302,7 +2327,8 @@ def get_trash():
                     'id': kept['id'],
                     'path': kept['path'],
                     'filename': kept['filename'],
-                    'thumbnail_url': f'/thumbnail/{kept["id"]}' if kept['thumbnail_path'] else None
+                    'thumbnail_url': f'/thumbnail/{kept["id"]}' if kept['thumbnail_path'] else None,
+                    'blur_url': f'data:image/jpeg;base64,{kept["blur_data"]}' if kept['blur_data'] else None
                 }
             else:
                 group['kept_photo'] = None
@@ -2861,7 +2887,7 @@ def get_map_photos():
     total = conn.execute(count_sql, params).fetchone()[0]
 
     query = f'''
-        SELECT id, filename, date_taken, latitude, longitude
+        SELECT id, filename, date_taken, latitude, longitude, blur_data
         FROM photos
         {where_clause}
         ORDER BY date_taken DESC
@@ -2880,6 +2906,7 @@ def get_map_photos():
             'lat': r['latitude'],
             'lon': r['longitude'],
             'thumbnail_url': f'/thumbnail/{r["id"]}',
+            'blur_url': f'data:image/jpeg;base64,{r["blur_data"]}' if r['blur_data'] else None,
             'date_taken': r['date_taken'],
             'filename': r['filename'],
         })

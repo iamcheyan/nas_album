@@ -90,9 +90,9 @@ function applyThumbSize(size) {
     document.getElementById('thumb-size-slider').value = size;
     document.getElementById('thumb-size-value').textContent = size + 'px';
 
-    document.querySelectorAll('.photo-grid').forEach(grid => {
-        grid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${size}px, 1fr))`;
-    });
+    if (virtualTimeline) {
+        virtualTimeline.refresh();
+    }
 }
 
 function initThumbSizeControl() {
@@ -594,17 +594,38 @@ function createPhotoElement(photo) {
 
     div.appendChild(actionsContainer);
 
+    const imgWrap = document.createElement('div');
+    imgWrap.className = 'photo-img-wrap';
+
     const img = document.createElement('img');
+    img.className = 'photo-img-real';
     img.src = photo.thumbnail_url;
     img.alt = photo.filename;
     img.loading = 'lazy';
+    img.onload = () => {
+        img.classList.add('loaded');
+    };
+    imgWrap.appendChild(img);
+
+    if (photo.blur_url) {
+        const placeholder = document.createElement('img');
+        placeholder.className = 'photo-img-placeholder';
+        placeholder.src = photo.blur_url;
+        placeholder.alt = '';
+        imgWrap.appendChild(placeholder);
+    }
+
+    div.appendChild(imgWrap);
 
     const dateDiv = document.createElement('div');
     dateDiv.className = 'photo-date';
     dateDiv.textContent = formatDate(photo.date_taken).time;
 
-    div.appendChild(img);
     div.appendChild(dateDiv);
+
+    if (selectionMode && selectedPhotos.has(parseInt(photo.id))) {
+        div.classList.add('selected');
+    }
 
     div.addEventListener('click', (e) => {
         if (selectionMode || e.shiftKey) {
@@ -1245,63 +1266,337 @@ function formatSize(bytes) {
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 }
 
-function renderPhotos(photos) {
-    const timeline = document.getElementById('timeline');
+// ========== 虚拟滚动时间轴 ==========
+class VirtualTimeline {
+    constructor(container) {
+        this.container = container;
+        this.items = [];
+        this.elements = new Map();
+        this.spacer = null;
+        this.content = null;
+        this.scrollHandler = null;
+        this.resizeObserver = null;
+        this.gap = 6;
+        this.buffer = 3000;
+        this._scrollPending = false;
+        this._metrics = { cols: 1, itemWidth: 200 };
+        this._lastRange = null;
+        this._removeTimer = null;
 
-    photos.forEach(photo => {
-        if (document.querySelector(`.photo-item[data-id="${photo.id}"]`)) {
+        this.init();
+    }
+
+    init() {
+        this.container.innerHTML = '';
+
+        this.spacer = document.createElement('div');
+        this.spacer.style.width = '1px';
+        this.container.appendChild(this.spacer);
+
+        this.content = document.createElement('div');
+        this.content.style.position = 'absolute';
+        this.content.style.top = '0';
+        this.content.style.left = '0';
+        this.content.style.right = '0';
+        this.content.style.zIndex = '1';
+        this.container.appendChild(this.content);
+
+        this.scrollHandler = () => this.scheduleRender();
+        this.container.addEventListener('scroll', this.scrollHandler, { passive: true });
+
+        this.resizeObserver = new ResizeObserver(() => {
+            this.refresh();
+        });
+        this.resizeObserver.observe(this.container);
+    }
+
+    destroy() {
+        this.container.removeEventListener('scroll', this.scrollHandler);
+        if (this.resizeObserver) this.resizeObserver.disconnect();
+        if (this._removeTimer) clearTimeout(this._removeTimer);
+        this.container.innerHTML = '';
+    }
+
+    setPhotos(photos) {
+        this.photos = photos || [];
+        this.rebuild();
+        this.render();
+    }
+
+    getMetrics() {
+        const padding = 40; // 20px * 2
+        const cw = Math.max(1, this.container.clientWidth - padding);
+        const cols = Math.max(1, Math.floor((cw + this.gap) / (thumbSize + this.gap)));
+        const itemWidth = (cw - (cols - 1) * this.gap) / cols;
+        this._metrics = { cols, itemWidth };
+        return this._metrics;
+    }
+
+    rebuild() {
+        this._lastRange = null;
+        if (!this.photos || this.photos.length === 0) {
+            this.items = [];
+            this.totalHeight = 0;
+            this.spacer.style.height = '0px';
             return;
         }
-        const { year, month, day } = formatDate(photo.date_taken);
-        const yearKey = `year-${year}`;
-        const monthKey = `month-${year}-${month}`;
-        const dayKey = `day-${year}-${month}-${day}`;
 
-        let yearGroup = document.getElementById(yearKey);
-        if (!yearGroup) {
-            yearGroup = document.createElement('div');
-            yearGroup.id = yearKey;
-            yearGroup.className = 'year-group';
+        const { cols, itemWidth } = this.getMetrics();
 
-            const yearLabel = document.createElement('div');
-            yearLabel.className = 'year-label';
-            yearLabel.textContent = t('date.year', year);
-            yearGroup.appendChild(yearLabel);
-
-            insertYearGroup(timeline, yearGroup, year);
+        // 按日期分组
+        const dayMap = new Map();
+        for (const photo of this.photos) {
+            const { year, month, day } = formatDate(photo.date_taken);
+            const key = `${year}-${month}-${day}`;
+            if (!dayMap.has(key)) {
+                dayMap.set(key, { year, month, day, photos: [] });
+            }
+            dayMap.get(key).photos.push(photo);
         }
 
-        let monthGroup = document.getElementById(monthKey);
-        if (!monthGroup) {
-            const monthLabel = document.createElement('div');
-            monthLabel.className = 'month-label';
-            monthLabel.textContent = t('date.month', month);
+        // 按日期降序排序
+        const days = Array.from(dayMap.values()).sort((a, b) => {
+            const da = new Date(a.year, a.month - 1, a.day);
+            const db = new Date(b.year, b.month - 1, b.day);
+            return db - da;
+        });
 
-            monthGroup = document.createElement('div');
-            monthGroup.id = monthKey;
-            monthGroup.className = 'month-group';
+        // 构建 items
+        this.items = [];
+        let top = 0;
+        let lastYear = null;
+        let lastMonth = null;
 
-            yearGroup.appendChild(monthLabel);
-            yearGroup.appendChild(monthGroup);
+        for (const day of days) {
+            if (day.year !== lastYear) {
+                this.items.push({ type: 'year', key: `y-${day.year}`, data: day.year, top, height: 70 });
+                top += 70;
+                lastYear = day.year;
+                lastMonth = null;
+            }
+
+            if (day.month !== lastMonth) {
+                this.items.push({ type: 'month', key: `m-${day.year}-${day.month}`, data: { year: day.year, month: day.month }, top, height: 48 });
+                top += 48;
+                lastMonth = day.month;
+            }
+
+            this.items.push({ type: 'day', key: `d-${day.year}-${day.month}-${day.day}`, data: day, top, height: 40 });
+            top += 40;
+
+            const rows = Math.ceil(day.photos.length / cols);
+            const gridHeight = rows * itemWidth + (rows - 1) * this.gap + 16;
+            this.items.push({ type: 'grid', key: `g-${day.year}-${day.month}-${day.day}`, data: day, top, height: gridHeight });
+            top += gridHeight;
         }
 
-        let dayGrid = document.getElementById(dayKey);
-        if (!dayGrid) {
-            const dayLabel = document.createElement('div');
-            dayLabel.className = 'day-label';
-            dayLabel.textContent = t('date.monthDay', month, day);
+        this.totalHeight = top;
+        this.spacer.style.height = `${top}px`;
+    }
 
-            dayGrid = document.createElement('div');
-            dayGrid.id = dayKey;
-            dayGrid.className = 'photo-grid';
-            dayGrid.style.gridTemplateColumns = `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`;
+    getVisibleRange() {
+        const scrollTop = this.container.scrollTop;
+        const viewportHeight = this.container.clientHeight;
+        const start = scrollTop - this.buffer;
+        const end = scrollTop + viewportHeight + this.buffer;
 
-            monthGroup.appendChild(dayLabel);
-            monthGroup.appendChild(dayGrid);
+        // 二分查找 startIndex
+        let lo = 0, hi = this.items.length - 1;
+        let startIndex = this.items.length;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const item = this.items[mid];
+            if (item.top + item.height > start) {
+                startIndex = mid;
+                hi = mid - 1;
+            } else {
+                lo = mid + 1;
+            }
         }
 
-        dayGrid.appendChild(createPhotoElement(photo));
-    });
+        // 二分查找 endIndex
+        lo = 0; hi = this.items.length - 1;
+        let endIndex = -1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const item = this.items[mid];
+            if (item.top < end) {
+                endIndex = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+
+        return { start: Math.max(0, startIndex), end: Math.min(this.items.length - 1, endIndex) };
+    }
+
+    render() {
+        if (!this.items.length) {
+            this.content.innerHTML = '';
+            this.elements.clear();
+            this._lastRange = null;
+            return;
+        }
+
+        const range = this.getVisibleRange();
+
+        // 如果范围没有变化，跳过渲染
+        if (this._lastRange
+            && this._lastRange.start === range.start
+            && this._lastRange.end === range.end) {
+            return;
+        }
+        this._lastRange = range;
+
+        const neededKeys = new Set();
+        const toAdd = [];
+
+        for (let i = range.start; i <= range.end; i++) {
+            const item = this.items[i];
+            neededKeys.add(item.key);
+            if (!this.elements.has(item.key)) {
+                toAdd.push(item);
+            }
+        }
+
+        // 添加新元素
+        for (const item of toAdd) {
+            const el = this.createElement(item);
+            el.style.position = 'absolute';
+            el.style.top = `${item.top}px`;
+            el.style.left = '0';
+            el.style.right = '0';
+            // 初始不可见，下一帧淡入
+            el.style.opacity = '0';
+            this.content.appendChild(el);
+            this.elements.set(item.key, el);
+            requestAnimationFrame(() => {
+                el.style.transition = 'opacity 0.25s ease';
+                el.style.opacity = '1';
+            });
+        }
+
+        // 延迟移除不可见元素，避免快速滚动时频繁创建/销毁
+        if (this._removeTimer) clearTimeout(this._removeTimer);
+        this._removeTimer = setTimeout(() => {
+            for (const [key, el] of this.elements) {
+                if (!neededKeys.has(key)) {
+                    el.remove();
+                    this.elements.delete(key);
+                }
+            }
+        }, 100);
+    }
+
+    scheduleRender() {
+        if (this._scrollPending) return;
+        this._scrollPending = true;
+        requestAnimationFrame(() => {
+            this._scrollPending = false;
+            this.render();
+        });
+    }
+
+    createElement(item) {
+        if (item.type === 'year') {
+            const el = document.createElement('div');
+            el.className = 'year-label';
+            el.id = `year-${item.data}`;
+            el.style.height = `${item.height}px`;
+            el.style.margin = '0';
+            el.style.display = 'flex';
+            el.style.alignItems = 'center';
+            el.textContent = t('date.year', item.data);
+            return el;
+        }
+        if (item.type === 'month') {
+            const el = document.createElement('div');
+            el.className = 'month-label';
+            el.id = `month-${item.data.year}-${item.data.month}`;
+            el.style.height = `${item.height}px`;
+            el.style.margin = '0';
+            el.style.display = 'flex';
+            el.style.alignItems = 'center';
+            el.textContent = t('date.month', item.data.month);
+            return el;
+        }
+        if (item.type === 'day') {
+            const el = document.createElement('div');
+            el.className = 'day-label';
+            el.id = `day-${item.data.year}-${item.data.month}-${item.data.day}`;
+            el.style.height = `${item.height}px`;
+            el.style.margin = '0';
+            el.style.display = 'flex';
+            el.style.alignItems = 'center';
+            el.textContent = t('date.monthDay', item.data.month, item.data.day);
+            return el;
+        }
+        if (item.type === 'grid') {
+            const el = document.createElement('div');
+            el.className = 'photo-grid';
+            el.id = `day-${item.data.year}-${item.data.month}-${item.data.day}`;
+            el.style.gridTemplateColumns = `repeat(auto-fill, minmax(${thumbSize}px, 1fr))`;
+            el.style.marginBottom = '0';
+            for (const photo of item.data.photos) {
+                el.appendChild(createPhotoElement(photo));
+            }
+            return el;
+        }
+    }
+
+    refresh() {
+        this.rebuild();
+        this.render();
+    }
+
+    getYearAtScroll(scrollTop) {
+        if (!this.items.length) return null;
+        let currentYear = null;
+        let minDist = Infinity;
+        for (const item of this.items) {
+            if (item.type === 'year') {
+                const dist = Math.abs(item.top - scrollTop);
+                if (dist < minDist) {
+                    minDist = dist;
+                    currentYear = String(item.data);
+                }
+            }
+        }
+        return currentYear;
+    }
+
+    getDateAtScroll(scrollTop) {
+        if (!this.items.length) return null;
+        // 找到 scrollTop 上方最近的 item，提取其日期
+        let result = null;
+        for (const item of this.items) {
+            if (item.top > scrollTop) break;
+            if (item.type === 'year') {
+                result = { year: item.data, month: null, day: null };
+            } else if (item.type === 'month') {
+                result = { year: item.data.year, month: item.data.month, day: null };
+            } else if (item.type === 'day' || item.type === 'grid') {
+                result = { year: item.data.year, month: item.data.month, day: item.data.day };
+            }
+        }
+        return result;
+    }
+
+    scrollToTop() {
+        this.container.scrollTop = 0;
+    }
+}
+
+let virtualTimeline = null;
+
+function renderPhotos(photos) {
+    if (!virtualTimeline) {
+        virtualTimeline = new VirtualTimeline(document.getElementById('timeline'));
+    }
+    // 使用 filteredPhotos（如果有前端过滤）否则用 allPhotos
+    const photosToRender = filteredPhotos.length > 0 ? filteredPhotos : allPhotos;
+    virtualTimeline.setPhotos(photosToRender);
 }
 
 function insertYearGroup(timeline, newGroup, year) {
@@ -1373,6 +1668,10 @@ function resetPhotos() {
     currentDayFilter = null;
     duplicatePage = 1;
     duplicateHasMore = true;
+    if (virtualTimeline) {
+        virtualTimeline.destroy();
+        virtualTimeline = null;
+    }
     document.getElementById('timeline').innerHTML = '';
 }
 
@@ -1570,7 +1869,10 @@ async function loadFilteredPhotos(view) {
 
         if (currentPage === 1) {
             allPhotos = data.photos;
-            document.getElementById('timeline').innerHTML = '';
+            if (virtualTimeline) {
+                virtualTimeline.destroy();
+                virtualTimeline = null;
+            }
         } else {
             allPhotos = allPhotos.concat(data.photos);
         }
@@ -1613,6 +1915,10 @@ async function loadPhotos() {
 
         if (currentPage === 1) {
             allPhotos = data.photos;
+            if (virtualTimeline) {
+                virtualTimeline.destroy();
+                virtualTimeline = null;
+            }
         } else {
             allPhotos = allPhotos.concat(data.photos);
         }
@@ -1731,45 +2037,66 @@ function syncSidebarHighlight(timeline) {
     // 只在全部照片视图且没有手动选择过滤时同步
     if (currentView !== 'all' || currentYearFilter || currentMonthFilter || currentDayFilter) return;
 
-    const yearGroups = timeline.querySelectorAll('.year-group');
-    if (yearGroups.length === 0) return;
+    const dateInfo = virtualTimeline ? virtualTimeline.getDateAtScroll(timeline.scrollTop + 80) : null;
+    if (!dateInfo || !dateInfo.year) return;
 
-    // 使用视口顶部+100px作为参考线，找到第一个跨越这条线的年份
-    const referenceLine = timeline.scrollTop + 80;
-    let currentYear = null;
+    const { year, month, day } = dateInfo;
 
-    for (const group of yearGroups) {
-        const groupTop = group.offsetTop;
-        const groupBottom = groupTop + group.offsetHeight;
-        if (groupTop <= referenceLine && groupBottom > referenceLine) {
-            currentYear = group.id.replace('year-', '');
-            break;
-        }
-    }
+    // 检查是否需要更新（避免不必要的 DOM 操作）
+    const activeYearEl = document.querySelector('.timeline-year.active');
+    const activeMonthEl = document.querySelector('.timeline-month.active');
+    const activeDayEl = document.querySelector('.timeline-day.active');
 
-    // 如果没找到（比如在两个年份之间），找最近的
-    if (!currentYear) {
-        let minDistance = Infinity;
-        for (const group of yearGroups) {
-            const groupTop = group.offsetTop;
-            const distance = Math.abs(groupTop - referenceLine);
-            if (distance < minDistance) {
-                minDistance = distance;
-                currentYear = group.id.replace('year-', '');
+    const yearChanged = !activeYearEl || activeYearEl.dataset.year !== String(year);
+    const monthChanged = !activeMonthEl || activeMonthEl.dataset.month !== String(month) || activeMonthEl.dataset.year !== String(year);
+    const dayChanged = !activeDayEl || activeDayEl.dataset.day !== String(day) || activeDayEl.dataset.month !== String(month) || activeDayEl.dataset.year !== String(year);
+
+    if (!yearChanged && !monthChanged && !dayChanged) return;
+
+    // 更新年份高亮并展开
+    document.querySelectorAll('.timeline-year').forEach(el => {
+        const isTarget = el.dataset.year === String(year);
+        el.classList.toggle('active', isTarget);
+        if (isTarget && yearChanged) {
+            el.classList.add('expanded');
+            const monthsContainer = el.nextElementSibling;
+            if (monthsContainer && monthsContainer.classList.contains('timeline-months')) {
+                monthsContainer.classList.add('expanded');
             }
         }
+    });
+
+    // 更新月份高亮并展开
+    if (month) {
+        document.querySelectorAll('.timeline-month').forEach(el => {
+            const isTarget = el.dataset.year === String(year) && el.dataset.month === String(month);
+            el.classList.toggle('active', isTarget);
+            if (isTarget && monthChanged) {
+                el.classList.add('expanded');
+                const daysContainer = el.nextElementSibling;
+                if (daysContainer && daysContainer.classList.contains('timeline-days')) {
+                    daysContainer.classList.add('expanded');
+                }
+            }
+        });
     }
 
-    if (!currentYear) return;
+    // 更新日期高亮
+    if (day) {
+        document.querySelectorAll('.timeline-day').forEach(el => {
+            const isTarget = el.dataset.year === String(year) && el.dataset.month === String(month) && el.dataset.day === String(day);
+            el.classList.toggle('active', isTarget);
+        });
+    }
 
-    // 只在年份变化时才更新，避免不必要的 DOM 操作
-    const activeYearEl = document.querySelector('.timeline-year.active');
-    if (activeYearEl && activeYearEl.dataset.year === currentYear) return;
-
-    // 更新侧边栏高亮
-    document.querySelectorAll('.timeline-year').forEach(el => {
-        el.classList.toggle('active', el.dataset.year === currentYear);
-    });
+    // 滚动侧边栏让高亮的项可见（用更新后的元素）
+    const newActiveDay = document.querySelector(`.timeline-day[data-year="${year}"][data-month="${month}"][data-day="${day}"]`);
+    const newActiveMonth = document.querySelector(`.timeline-month[data-year="${year}"][data-month="${month}"]`);
+    if (dayChanged && newActiveDay) {
+        newActiveDay.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else if (monthChanged && newActiveMonth) {
+        newActiveMonth.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
 }
 
 // ========== 灯箱 ==========
@@ -2538,6 +2865,10 @@ async function loadPhotosBySource(sourcePath) {
         const data = await response.json();
         allPhotos = data.photos;
         filteredPhotos = allPhotos;
+        if (virtualTimeline) {
+            virtualTimeline.destroy();
+            virtualTimeline = null;
+        }
         renderPhotos(data.photos);
         updateStatus(data.total, 0);
         hasMore = false;
@@ -2601,6 +2932,10 @@ async function loadPhotosByAlbum(albumId) {
         const data = await response.json();
         allPhotos = data.photos;
         filteredPhotos = allPhotos;
+        if (virtualTimeline) {
+            virtualTimeline.destroy();
+            virtualTimeline = null;
+        }
         renderPhotos(data.photos);
         updateStatus(data.photos.length, 0);
         hasMore = false;
