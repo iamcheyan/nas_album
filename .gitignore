@@ -9,6 +9,8 @@ Photos Library.photoslibrary/
 photos.db
 photos.db-shm
 photos.db-wal
+photo_library.db
+photos.db.bak.*
 
 # Python
 __pycache__/
