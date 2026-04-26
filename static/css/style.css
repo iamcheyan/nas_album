@@ -1723,9 +1723,22 @@ a.exif-value:hover {
         font-size: 1.1rem;
     }
 
-    .thumb-size-control,
     .photo-filter-select {
         display: none;
+    }
+
+    .thumb-size-control {
+        padding: 3px 8px;
+        gap: 4px;
+    }
+
+    .thumb-size-control input[type="range"] {
+        width: 60px;
+    }
+
+    .thumb-size-control #thumb-size-value {
+        font-size: 0.7rem;
+        min-width: 32px;
     }
 
     /* 地图视图移动端适配 */
