@@ -337,6 +337,10 @@ body {
     color: var(--text-primary);
 }
 
+.search-toggle-btn {
+    display: none;
+}
+
 /* ========== 视图标题栏 ========== */
 .view-header {
     height: var(--view-header-height);
@@ -1688,6 +1692,26 @@ a.exif-value:hover {
 
     .search-box {
         display: none;
+        position: absolute;
+        top: var(--top-bar-height);
+        right: 8px;
+        left: 8px;
+        max-width: none;
+        min-width: auto;
+        background: var(--bg-secondary);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 8px 12px;
+        z-index: 200;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    .search-box.mobile-open {
+        display: flex;
+    }
+
+    .search-toggle-btn {
+        display: flex;
     }
 
     .view-header {
@@ -1702,6 +1726,46 @@ a.exif-value:hover {
     .thumb-size-control,
     .photo-filter-select {
         display: none;
+    }
+
+    /* 地图视图移动端适配 */
+    #map-container {
+        height: calc(100vh - var(--top-bar-height) - var(--status-bar-height) - env(safe-area-inset-bottom, 0px));
+    }
+
+    .leaflet-control-zoom {
+        margin-right: 10px !important;
+        margin-bottom: 20px !important;
+    }
+
+    .leaflet-control-zoom a {
+        width: 36px !important;
+        height: 36px !important;
+        line-height: 36px !important;
+        font-size: 18px !important;
+    }
+
+    .leaflet-control-attribution {
+        font-size: 8px !important;
+        max-width: 45%;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding: 2px 4px !important;
+    }
+
+    .leaflet-popup {
+        margin-bottom: 16px;
+    }
+
+    .map-popup {
+        min-width: 100px;
+        max-width: 140px;
+    }
+
+    .map-popup-thumb {
+        max-width: 100px;
+        max-height: 100px;
     }
 
     .timeline-main {

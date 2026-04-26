@@ -143,7 +143,10 @@
                     <button class="top-tab" data-tab="dbinfo" data-i18n="tab.dbinfo">数据库信息</button>
                 </div>
                 <div class="top-actions">
-                    <div class="search-box">
+                    <button id="search-toggle-btn" class="icon-btn search-toggle-btn" data-i18n-title="action.searchToggle" title="搜索">
+                        <svg width="18" height="18"><use href="#icon-search"/></svg>
+                    </button>
+                    <div class="search-box" id="search-box">
                         <svg class="search-icon" width="16" height="16"><use href="#icon-search"/></svg>
                         <input type="text" id="search-input" data-i18n-placeholder="action.search" placeholder="搜索照片...">
                     </div>

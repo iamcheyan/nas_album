@@ -20,6 +20,7 @@ const I18N = {
 
         // Actions
         'action.search': '搜索照片...',
+        'action.searchToggle': '搜索',
         'action.settings': '设置',
         'action.select': '选择',
         'action.delete': '删除',
@@ -379,6 +380,7 @@ const I18N = {
 
         // Actions
         'action.search': 'Search photos...',
+        'action.searchToggle': 'Search',
         'action.settings': 'Settings',
         'action.select': 'Select',
         'action.delete': 'Delete',
@@ -738,6 +740,7 @@ const I18N = {
 
         // Actions
         'action.search': '写真を検索...',
+        'action.searchToggle': '検索',
         'action.settings': '設定',
         'action.select': '選択',
         'action.delete': '削除',

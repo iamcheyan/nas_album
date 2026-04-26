@@ -459,7 +459,29 @@ async function loadDbInfo() {
 // ========== 搜索 ==========
 function initSearch() {
     const input = document.getElementById('search-input');
+    const searchBox = document.getElementById('search-box');
+    const searchToggleBtn = document.getElementById('search-toggle-btn');
     let debounceTimer;
+
+    // Mobile search toggle
+    if (searchToggleBtn) {
+        searchToggleBtn.addEventListener('click', () => {
+            searchBox.classList.toggle('mobile-open');
+            if (searchBox.classList.contains('mobile-open')) {
+                input.focus();
+            }
+        });
+    }
+
+    // Close mobile search when clicking outside
+    document.addEventListener('click', (e) => {
+        if (window.innerWidth <= 767 && searchBox && searchBox.classList.contains('mobile-open')) {
+            if (!searchBox.contains(e.target) && !searchToggleBtn.contains(e.target)) {
+                searchBox.classList.remove('mobile-open');
+            }
+        }
+    });
+
     input.addEventListener('input', (e) => {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
@@ -1533,7 +1555,7 @@ async function loadTrash() {
                 const div = document.createElement('div');
                 div.className = 'photo-item';
                 div.innerHTML = `
-                    <div class="photo-date" style="opacity:1">${item.filename}<br>${t('label.daysRemaining', item.days_remaining)}</div>
+                    <div class="photo-date" style="opacity:1">${item.filename}<br>${t('trash.daysRemaining', item.days_remaining)}</div>
                 `;
                 // 没有缩略图时显示占位
                 const img = document.createElement('img');
@@ -2950,7 +2972,7 @@ function initLanguageSelector() {
 
         // Refresh map
         if (currentTab === 'map' && typeof mapInstance !== 'undefined' && mapInstance) {
-            loadMapPhotos();
+            loadMapView();
         }
 
         // Refresh stats
