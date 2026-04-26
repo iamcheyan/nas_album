@@ -35,3 +35,4 @@ ENV/
 
 # 日志
 *.log
+asset/
