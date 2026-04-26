@@ -164,6 +164,19 @@ function switchView(view) {
     document.querySelectorAll('.top-tab').forEach(t => t.classList.remove('active'));
     document.querySelector('.top-tab[data-tab="all"]').classList.add('active');
 
+    // Toggle select-mode-btn vs dup-cleanup-action-btn based on view
+    const selectModeBtn = document.getElementById('select-mode-btn');
+    const dupCleanupActionBtn = document.getElementById('dup-cleanup-action-btn');
+    if (selectModeBtn && dupCleanupActionBtn) {
+        if (view === 'duplicates') {
+            selectModeBtn.classList.add('hidden');
+            dupCleanupActionBtn.classList.remove('hidden');
+        } else {
+            selectModeBtn.classList.remove('hidden');
+            dupCleanupActionBtn.classList.add('hidden');
+        }
+    }
+
     if (view === 'trash') {
         loadTrash();
     } else if (view === 'hidden') {
@@ -633,6 +646,7 @@ function enableSelectionMode() {
     selectionMode = true;
     document.body.classList.add('selection-mode');
     document.getElementById('selection-bar').classList.add('visible');
+    updateSelectionUI();
 }
 
 function disableSelectionMode() {
@@ -1062,7 +1076,24 @@ function escapeHtml(text) {
 function updateSelectionUI() {
     const count = selectedPhotos.size;
     document.getElementById('selection-count').textContent = t('status.selectedCount', count);
-    document.getElementById('batch-delete-btn').disabled = count === 0;
+    
+    const batchDeleteBtn = document.getElementById('batch-delete-btn');
+    const trashRestoreAllBtn = document.getElementById('trash-restore-all-btn');
+    const trashDeleteAllBtn = document.getElementById('trash-delete-all-btn');
+
+    if (currentView === 'trash') {
+        if (batchDeleteBtn) batchDeleteBtn.classList.add('hidden');
+        if (trashRestoreAllBtn) trashRestoreAllBtn.classList.remove('hidden');
+        if (trashDeleteAllBtn) trashDeleteAllBtn.classList.remove('hidden');
+    } else {
+        if (batchDeleteBtn) {
+            batchDeleteBtn.classList.remove('hidden');
+            batchDeleteBtn.disabled = count === 0;
+        }
+        if (trashRestoreAllBtn) trashRestoreAllBtn.classList.add('hidden');
+        if (trashDeleteAllBtn) trashDeleteAllBtn.classList.add('hidden');
+    }
+
     updateStatus(filteredPhotos.length, count);
 }
 
@@ -1113,6 +1144,79 @@ async function batchDelete() {
     } catch (err) {
         console.error(t('dialog.batchDeleteFailed') + ':', err);
         showToast(t('dialog.batchDeleteFailed') + ': ' + err.message);
+    }
+}
+
+async function restoreAllTrash() {
+    const confirmed = await showDialog({
+        type: 'confirm',
+        title: t('trash.restoreAll'),
+        message: t('trash.restoreAllConfirm'),
+        confirmText: t('action.confirm'),
+        cancelText: t('action.cancel')
+    });
+
+    if (!confirmed) return;
+
+    const btn = document.getElementById('trash-restore-all-btn');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = t('trash.restoring');
+
+    try {
+        const response = await fetch('/api/trash/restore_all', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showToast(data.message);
+            disableSelectionMode();
+            loadTrash();
+            loadStats();
+        } else {
+            showToast(data.message || t('trash.restoreAllFailed'));
+        }
+    } catch (err) {
+        console.error('Restore all failed:', err);
+        showToast(t('trash.restoreAllFailed'));
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+    }
+}
+
+async function deleteAllTrash() {
+    const confirmed = await showDialog({
+        type: 'confirm',
+        title: t('trash.deleteAll'),
+        message: t('trash.deleteAllConfirm'),
+        confirmText: t('action.delete'),
+        confirmClass: 'btn btn-danger',
+        cancelText: t('action.cancel')
+    });
+
+    if (!confirmed) return;
+
+    const btn = document.getElementById('trash-delete-all-btn');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = t('trash.deleting');
+
+    try {
+        const response = await fetch('/api/trash/delete_all', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showToast(data.message);
+            disableSelectionMode();
+            loadTrash();
+            loadStats();
+        } else {
+            showToast(data.message || '删除失败');
+        }
+    } catch (err) {
+        console.error('Delete all failed:', err);
+        showToast('删除失败');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
     }
 }
 
@@ -1539,6 +1643,8 @@ async function loadTrash() {
     try {
         const response = await fetch('/api/trash');
         const items = await response.json();
+        allPhotos = items;
+        filteredPhotos = items;
 
         timeline.innerHTML = '';
         if (items.length === 0) {
@@ -1551,15 +1657,32 @@ async function loadTrash() {
             items.forEach(item => {
                 const div = document.createElement('div');
                 div.className = 'photo-item';
+                div.dataset.id = item.id;
+                
+                // Use thumbnail URL if available, otherwise show placeholder
+                const hasThumb = !!item.thumbnail_url;
+                const imgSrc = hasThumb ? item.thumbnail_url : '/static/favicon.ico';
+                
                 div.innerHTML = `
+                    <img src="${imgSrc}" alt="${item.filename}" loading="lazy" 
+                         onerror="this.style.display='none'"
+                         style="${hasThumb ? '' : 'opacity:0.3'}">
                     <div class="photo-date" style="opacity:1">${item.filename}<br>${t('trash.daysRemaining', item.days_remaining)}</div>
                 `;
-                // 没有缩略图时显示占位
-                const img = document.createElement('img');
-                img.src = '/static/favicon.ico';
-                img.alt = item.filename;
-                img.style.opacity = '0.3';
-                div.insertBefore(img, div.firstChild);
+
+                div.addEventListener('click', (e) => {
+                    if (selectionMode || e.shiftKey) {
+                        toggleSelection(item.id, div);
+                    } else {
+                        // For trash, maybe we don't open lightbox or we open a restricted one
+                        // For now, let's just support selection
+                        if (!selectionMode) {
+                            enableSelectionMode();
+                            toggleSelection(item.id, div);
+                        }
+                    }
+                });
+
                 grid.appendChild(div);
             });
             timeline.appendChild(grid);
@@ -2734,13 +2857,115 @@ document.addEventListener('mouseup', () => {
 });
 
 // ========== 初始化 ==========
-document.getElementById('select-mode-btn').addEventListener('click', enableSelectionMode);
-document.getElementById('cancel-selection-btn').addEventListener('click', disableSelectionMode);
-document.getElementById('batch-delete-btn').addEventListener('click', batchDelete);
+const initBtn = (id, event, fn) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener(event, fn);
+};
+
+initBtn('select-mode-btn', 'click', enableSelectionMode);
+initBtn('cancel-selection-btn', 'click', disableSelectionMode);
+initBtn('batch-delete-btn', 'click', batchDelete);
+initBtn('trash-restore-all-btn', 'click', restoreAllTrash);
+initBtn('trash-delete-all-btn', 'click', deleteAllTrash);
 
 // 重复照片删除按钮
-const dupDeleteBtn = document.getElementById('duplicates-delete-btn');
-if (dupDeleteBtn) dupDeleteBtn.addEventListener('click', deleteMarkedDuplicates);
+initBtn('duplicates-delete-btn', 'click', deleteMarkedDuplicates);
+
+// 一键清理重复照片（每组保留精度最高的一张）
+let cleanupPollInterval = null;
+
+function updateCleanupProgress(data) {
+    const progressEl = document.getElementById('cleanup-progress');
+    const fillEl = document.getElementById('cleanup-progress-fill');
+    const textEl = document.getElementById('cleanup-progress-text');
+    
+    if (!progressEl || !fillEl || !textEl) return;
+    
+    progressEl.classList.remove('hidden');
+    const total = data.total_groups || 1;
+    const pct = Math.min(100, Math.round((data.processed_groups / total) * 100));
+    fillEl.style.width = pct + '%';
+    textEl.textContent = `${data.processed_groups} / ${total} · ${t('duplicates.deleted', data.deleted_count || 0)}`;
+}
+
+async function pollCleanupStatus() {
+    try {
+        const res = await fetch('/api/duplicates/cleanup/status');
+        const data = await res.json();
+        updateCleanupProgress(data);
+        
+        if (!data.is_running) {
+            if (cleanupPollInterval) {
+                clearInterval(cleanupPollInterval);
+                cleanupPollInterval = null;
+            }
+            // 清理完成，刷新列表
+            const dupCleanupBtn = document.getElementById('duplicates-cleanup-btn');
+            if (dupCleanupBtn) {
+                dupCleanupBtn.disabled = false;
+                dupCleanupBtn.textContent = t('duplicates.oneClickCleanup') || '一键清理';
+            }
+            const dupCleanupActionBtn = document.getElementById('dup-cleanup-action-btn');
+            if (dupCleanupActionBtn) {
+                dupCleanupActionBtn.disabled = false;
+                dupCleanupActionBtn.textContent = t('duplicates.oneClickCleanup') || '一键清理';
+            }
+            showToast(data.message || t('duplicates.cleanupComplete') || '清理完成');
+            duplicatePage = 1;
+            duplicateHasMore = true;
+            const timeline = document.getElementById('timeline');
+            timeline.innerHTML = '';
+            await loadDuplicates();
+            loadSidebarCounts();
+            loadStats();
+            setTimeout(() => {
+                const progressEl = document.getElementById('cleanup-progress');
+                if (progressEl) progressEl.classList.add('hidden');
+            }, 3000);
+        }
+    } catch (e) {
+        console.error('轮询清理状态失败:', e);
+    }
+}
+
+async function startCleanup(buttonEl) {
+    const msg = t('duplicates.cleanupConfirm') || '确定一键清理重复照片吗？每组将只保留精度最高的一张，其余全部移到回收站。';
+    if (!confirm(msg)) return;
+    
+    buttonEl.disabled = true;
+    const originalText = buttonEl.textContent;
+    buttonEl.textContent = t('duplicates.cleaning') || '清理中...';
+    
+    try {
+        const res = await fetch('/api/duplicates/cleanup', { method: 'POST' });
+        const data = await res.json();
+        
+        if (data.success) {
+            // 启动轮询
+            if (cleanupPollInterval) clearInterval(cleanupPollInterval);
+            cleanupPollInterval = setInterval(pollCleanupStatus, 500);
+        } else {
+            showToast(data.message || '清理失败');
+            buttonEl.disabled = false;
+            buttonEl.textContent = originalText;
+        }
+    } catch (e) {
+        console.error('一键清理失败:', e);
+        showToast('清理请求失败');
+        buttonEl.disabled = false;
+        buttonEl.textContent = originalText;
+    }
+}
+
+const dupCleanupBtn = document.getElementById('duplicates-cleanup-btn');
+if (dupCleanupBtn) {
+    dupCleanupBtn.addEventListener('click', () => startCleanup(dupCleanupBtn));
+}
+
+const dupCleanupActionBtn = document.getElementById('dup-cleanup-action-btn');
+if (dupCleanupActionBtn) {
+    dupCleanupActionBtn.addEventListener('click', () => startCleanup(dupCleanupActionBtn));
+}
 
 // 批量应用默认设置（每组保留质量最高的副本）
 const dupApplyDefaultBtn = document.getElementById('duplicates-apply-default-btn');
@@ -2769,6 +2994,7 @@ const settingsOverlay = settingsPanel.querySelector('.settings-overlay');
 
 document.getElementById('settings-btn').addEventListener('click', () => {
     settingsPanel.classList.remove('hidden');
+    loadLibraryPaths();
 });
 
 settingsClose.addEventListener('click', () => {
@@ -2778,6 +3004,132 @@ settingsClose.addEventListener('click', () => {
 settingsOverlay.addEventListener('click', () => {
     settingsPanel.classList.add('hidden');
 });
+
+// ========== Library Paths Management ==========
+async function loadLibraryPaths() {
+    try {
+        const res = await fetch('/api/library_paths');
+        const paths = await res.json();
+        const container = document.getElementById('library-paths-list');
+        if (!container) return;
+        
+        container.innerHTML = '';
+        paths.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'library-path-item' + (item.enabled ? '' : ' disabled');
+            div.dataset.id = item.id;
+            
+            const name = item.path.split('/').filter(Boolean).pop() || item.path;
+            
+            const statusLabel = item.enabled ? t('settings.enabled') : t('settings.disabled');
+            div.innerHTML = `
+                <input type="checkbox" ${item.enabled ? 'checked' : ''} title="${t('settings.enabled')} / ${t('settings.disabled')}">
+                <div class="library-path-info">
+                    <div class="library-path-name" title="${item.path}">${item.path}</div>
+                    <div class="library-path-meta">
+                        <span class="library-path-count">${item.count} ${t('status.items', item.count)}</span>
+                        <span class="library-path-status ${item.enabled ? 'enabled' : 'disabled'}">${statusLabel}</span>
+                    </div>
+                </div>
+                <button class="library-path-delete" title="${t('action.delete')}">
+                    <svg width="16" height="16"><use href="#icon-trash"/></svg>
+                </button>
+            `;
+            
+            const checkbox = div.querySelector('input[type="checkbox"]');
+            checkbox.addEventListener('change', async () => {
+                try {
+                    const res = await fetch(`/api/library_paths/${item.id}/toggle`, { method: 'POST' });
+                    const data = await res.json();
+                    if (data.success) {
+                        div.classList.toggle('disabled', !data.enabled);
+                        const statusEl = div.querySelector('.library-path-status');
+                        if (statusEl) {
+                            statusEl.textContent = data.enabled ? t('settings.enabled') : t('settings.disabled');
+                            statusEl.classList.toggle('enabled', data.enabled);
+                            statusEl.classList.toggle('disabled', !data.enabled);
+                        }
+                        loadSources();
+                        loadStats();
+                    }
+                } catch (e) {
+                    console.error('Toggle failed:', e);
+                    checkbox.checked = !checkbox.checked;
+                }
+            });
+            
+            const deleteBtn = div.querySelector('.library-path-delete');
+            deleteBtn.addEventListener('click', async () => {
+                const confirmed = await showDialog({
+                    type: 'confirm',
+                    icon: '<svg width="32" height="32"><use href="#icon-trash"/></svg>',
+                    title: t('dialog.confirmDeleteTitle'),
+                    message: t('dialog.confirmDeleteSingleMsg', t('dialog.photo'), item.path),
+                    confirmText: t('action.delete'),
+                    confirmClass: 'btn btn-danger',
+                    cancelText: t('action.cancel')
+                });
+                if (!confirmed) return;
+                
+                try {
+                    const res = await fetch(`/api/library_paths/${item.id}`, { method: 'DELETE' });
+                    const data = await res.json();
+                    if (data.success) {
+                        div.remove();
+                        loadSources();
+                        loadStats();
+                    }
+                } catch (e) {
+                    console.error('Delete failed:', e);
+                }
+            });
+            
+            container.appendChild(div);
+        });
+    } catch (e) {
+        console.error('Load library paths failed:', e);
+    }
+}
+
+const addPathBtn = document.getElementById('add-library-path-btn');
+const pathInput = document.getElementById('library-path-input');
+const pathError = document.getElementById('library-path-error');
+
+if (addPathBtn && pathInput) {
+    addPathBtn.addEventListener('click', async () => {
+        const path = pathInput.value.trim();
+        if (!path) return;
+        
+        pathError.classList.add('hidden');
+        addPathBtn.disabled = true;
+        
+        try {
+            const res = await fetch('/api/library_paths', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path })
+            });
+            const data = await res.json();
+            if (data.success) {
+                pathInput.value = '';
+                loadLibraryPaths();
+                loadSources();
+            } else {
+                pathError.textContent = data.error || t('settings.pathNotFound');
+                pathError.classList.remove('hidden');
+            }
+        } catch (e) {
+            pathError.textContent = t('settings.pathNotFound');
+            pathError.classList.remove('hidden');
+        } finally {
+            addPathBtn.disabled = false;
+        }
+    });
+    
+    pathInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') addPathBtn.click();
+    });
+}
 
 // ========== Map Provider Selector ==========
 function initMapProviderSelector() {
@@ -2939,6 +3291,110 @@ document.getElementById('check-permission-btn').addEventListener('click', async 
     }
 });
 
+// ========== 扫描进度弹窗 ==========
+let scanProgressModal = null;
+let scanProgressClose = null;
+let scanProgressInterval = null;
+
+function initScanProgress() {
+    scanProgressModal = document.getElementById('scan-progress-modal');
+    scanProgressClose = document.getElementById('scan-progress-close');
+    if (!scanProgressModal || !scanProgressClose) {
+        console.warn('扫描进度弹窗元素未找到');
+        return;
+    }
+    scanProgressClose.addEventListener('click', closeScanProgress);
+    document.querySelector('.scan-progress-overlay').addEventListener('click', closeScanProgress);
+    
+    // 设置页面的扫描按钮
+    const scanLibraryBtn = document.getElementById('scan-library-btn');
+    if (scanLibraryBtn) {
+        scanLibraryBtn.addEventListener('click', async () => {
+            const btn = document.getElementById('scan-library-btn');
+            btn.disabled = true;
+            btn.textContent = '扫描中...';
+            
+            try {
+                const res = await fetch('/api/rescan', { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    openScanProgress();
+                }
+            } catch (e) {
+                showToast('启动扫描失败');
+                btn.disabled = false;
+                btn.textContent = '开始扫描';
+            }
+        });
+    }
+}
+
+function formatTime(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function getPhaseText(phase) {
+    const key = 'scan.phase.' + phase;
+    return t(key) || phase;
+}
+
+function openScanProgress() {
+    if (!scanProgressModal) return;
+    scanProgressModal.classList.remove('hidden');
+    updateScanProgress();
+    scanProgressInterval = setInterval(updateScanProgress, 500);
+}
+
+function closeScanProgress() {
+    if (scanProgressModal) scanProgressModal.classList.add('hidden');
+    if (scanProgressInterval) {
+        clearInterval(scanProgressInterval);
+        scanProgressInterval = null;
+    }
+}
+
+async function updateScanProgress() {
+    try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        
+        document.getElementById('scan-phase').textContent = getPhaseText(data.phase);
+        document.getElementById('scan-progress-fill').style.width = data.progress_percent + '%';
+        document.getElementById('scan-progress-text').textContent = `${data.scanned} / ${data.total}`;
+        document.getElementById('scan-progress-percent').textContent = data.progress_percent + '%';
+        document.getElementById('scan-elapsed').textContent = `已用: ${formatTime(data.elapsed_seconds)}`;
+        document.getElementById('scan-eta').textContent = data.eta_seconds > 0 ? `预计剩余: ${formatTime(data.eta_seconds)}` : '预计剩余: --:--';
+        
+        const currentFile = data.current_file || '';
+        document.getElementById('scan-current-file').textContent = currentFile ? `当前: ${currentFile}` : '';
+        
+        // 来源统计
+        const sourcesEl = document.getElementById('scan-sources');
+        if (data.sources && Object.keys(data.sources).length > 0) {
+            let sourcesHtml = '<div style="margin-top:8px;font-weight:600;">各来源统计:</div>';
+            for (const [source, count] of Object.entries(data.sources)) {
+                sourcesHtml += `<div class="scan-source-item"><span>${source}</span><span>${count}</span></div>`;
+            }
+            sourcesEl.innerHTML = sourcesHtml;
+        }
+        
+        // 扫描完成自动关闭
+        if (!data.scanning && data.phase === 'idle' && data.total > 0) {
+            setTimeout(() => {
+                closeScanProgress();
+                showToast('扫描完成');
+                loadSidebarCounts();
+            }, 1500);
+        }
+    } catch (e) {
+        console.error('获取扫描状态失败:', e);
+    }
+}
+
+
+
 function initLanguageSelector() {
     document.querySelectorAll('.lang-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -3013,6 +3469,7 @@ function initLanguageSelector() {
 }
 
 async function init() {
+    initScanProgress();
     initThumbSizeControl();
     initSidebar();
     initTopTabs();

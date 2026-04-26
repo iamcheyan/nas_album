@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>NAS Album</title>
+    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 </head>
@@ -51,7 +52,7 @@
         <!-- 左侧边栏 -->
         <aside id="sidebar" class="sidebar">
             <div class="sidebar-header">
-                <h2><svg width="20" height="20" style="vertical-align:-3px;margin-right:6px"><use href="#icon-camera"/></svg>NAS Album</h2>
+                <h2><img src="/static/logo.png" alt="logo" class="app-logo">NAS Album</h2>
             </div>
 
             <nav class="sidebar-nav">
@@ -163,6 +164,8 @@
             <div id="selection-bar" class="selection-bar">
                 <span id="selection-count" data-i18n="status.selectedCount" data-i18n-args="0">已选择 0 张</span>
                 <div class="selection-actions">
+                    <button id="trash-restore-all-btn" class="btn btn-primary hidden" data-i18n="trash.restoreAll">全部还原</button>
+                    <button id="trash-delete-all-btn" class="btn btn-danger hidden" data-i18n="trash.deleteAll">全部删除</button>
                     <button id="batch-delete-btn" class="btn btn-danger" disabled data-i18n="action.delete">删除</button>
                     <button id="cancel-selection-btn" class="btn btn-secondary" data-i18n="action.cancel">取消</button>
                 </div>
@@ -171,9 +174,16 @@
             <!-- 重复照片操作栏 -->
             <div id="duplicates-bar" class="duplicates-bar hidden">
                 <span id="duplicates-count">已标记 0 个文件待删除</span>
-                <div style="display:flex;gap:8px">
+                <div style="display:flex;gap:8px;align-items:center">
+                    <button id="duplicates-cleanup-btn" class="btn btn-danger" data-i18n="duplicates.oneClickCleanup" title="每组只保留精度最高的一张，其余全部删除">一键清理</button>
                     <button id="duplicates-apply-default-btn" class="btn btn-secondary" data-i18n="duplicates.applyDefault" title="全部应用默认设置（保留质量最高的副本）">应用默认</button>
                     <button id="duplicates-delete-btn" class="btn btn-danger" data-i18n="duplicates.deleteMarked">删除标记项</button>
+                </div>
+                <div id="cleanup-progress" class="cleanup-progress hidden" style="width:100%;margin-top:8px">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="cleanup-progress-fill"></div>
+                    </div>
+                    <div class="progress-text" id="cleanup-progress-text">0 / 0</div>
                 </div>
             </div>
 
@@ -182,6 +192,7 @@
                 <h1 id="view-title" data-i18n="title.allPhotos">全部照片</h1>
                 <div class="view-actions">
                     <button id="select-mode-btn" class="btn btn-secondary" data-i18n="action.select">选择</button>
+                    <button id="dup-cleanup-action-btn" class="btn btn-danger hidden" data-i18n="duplicates.oneClickCleanup">一键清理</button>
                     <select id="photo-filter-type" class="photo-filter-select">
                         <option value="all" data-i18n="filter.all">全部</option>
                         <option value="photo" data-i18n="filter.photo">照片</option>
@@ -328,6 +339,15 @@
                     </div>
                 </div>
                 <div class="settings-section">
+                    <h4 data-i18n="settings.libraryPaths">资源库目录</h4>
+                    <div id="library-paths-list" class="library-paths-list"></div>
+                    <div class="library-path-add">
+                        <input type="text" id="library-path-input" class="library-path-input" placeholder="输入目录路径..." data-i18n-placeholder="settings.pathPlaceholder">
+                        <button id="add-library-path-btn" class="btn btn-primary" data-i18n="settings.addPath">添加</button>
+                    </div>
+                    <div id="library-path-error" class="library-path-error hidden"></div>
+                </div>
+                <div class="settings-section">
                     <h4 data-i18n="settings.dataMaintenance">数据维护</h4>
                     <div class="settings-item">
                         <div class="settings-item-info">
@@ -358,7 +378,43 @@
                         <button id="check-permission-btn" class="btn btn-primary" data-i18n="settings.checkPermission">检查权限</button>
                     </div>
                     <div id="permission-result" class="permission-result hidden"></div>
+                    <div class="settings-item">
+                        <div class="settings-item-info">
+                            <div class="settings-item-title" data-i18n="settings.scanLibrary">扫描照片库</div>
+                            <div class="settings-item-desc" data-i18n="settings.scanLibraryDesc">扫描配置的目录，将新照片添加到数据库</div>
+                        </div>
+                        <button id="scan-library-btn" class="btn btn-primary" data-i18n="settings.startScan">开始扫描</button>
+                    </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 扫描进度弹窗 -->
+    <div id="scan-progress-modal" class="scan-progress-modal hidden">
+        <div class="scan-progress-overlay"></div>
+        <div class="scan-progress-box">
+            <div class="scan-progress-header">
+                <h3 id="scan-progress-title" data-i18n="scan.title">扫描照片库</h3>
+                <button id="scan-progress-close" class="icon-btn">
+                    <svg width="18" height="18"><use href="#icon-close"/></svg>
+                </button>
+            </div>
+            <div class="scan-progress-content">
+                <div class="scan-phase" id="scan-phase">准备中...</div>
+                <div class="progress-bar scan-progress-bar">
+                    <div class="progress-fill" id="scan-progress-fill"></div>
+                </div>
+                <div class="scan-stats">
+                    <span id="scan-progress-text">0 / 0</span>
+                    <span id="scan-progress-percent">0%</span>
+                </div>
+                <div class="scan-time">
+                    <span id="scan-elapsed">已用: 00:00</span>
+                    <span id="scan-eta">预计剩余: --:--</span>
+                </div>
+                <div class="scan-current-file" id="scan-current-file"></div>
+                <div class="scan-sources" id="scan-sources"></div>
             </div>
         </div>
     </div>

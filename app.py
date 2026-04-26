@@ -21,6 +21,15 @@ pillow_heif.register_heif_opener()
 
 app = Flask(__name__)
 
+# 禁用静态文件缓存（开发环境）
+@app.after_request
+def add_header(response):
+    if 'Cache-Control' not in response.headers:
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
+
 # 全局扫描状态变量
 scan_status = {
     'is_scanning': False,
@@ -30,6 +39,9 @@ scan_status = {
     'added_count': 0,
     'thumbnail_count': 0,
     'error_count': 0,
+    'current_file': '',  # 当前正在处理的文件
+    'start_time': None,  # 扫描开始时间
+    'sources': {},  # 各来源的统计 {source_path: count}
 }
 scan_lock = threading.Lock()
 
@@ -44,6 +56,19 @@ backfill_status = {
 }
 backfill_lock = threading.Lock()
 backfill_stop_event = threading.Event()
+
+# 全局重复照片清理状态
+cleanup_status = {
+    'is_running': False,
+    'total_groups': 0,
+    'processed_groups': 0,
+    'deleted_count': 0,
+    'kept_count': 0,
+    'failed_count': 0,
+    'current_group': '',
+    'message': '',
+}
+cleanup_lock = threading.Lock()
 
 # 导入配置文件
 from config import (
@@ -115,15 +140,27 @@ def init_db():
     if 'hidden' not in existing_cols:
         conn.execute('ALTER TABLE photos ADD COLUMN hidden INTEGER DEFAULT 0')
     
+    # Migrate: add thumbnail_path to trash table if not exists
+    trash_cols = {row['name'] for row in conn.execute("PRAGMA table_info(trash)")}
+    if 'thumbnail_path' not in trash_cols:
+        conn.execute('ALTER TABLE trash ADD COLUMN thumbnail_path TEXT')
+    if 'duplicate_group_id' not in trash_cols:
+        conn.execute('ALTER TABLE trash ADD COLUMN duplicate_group_id TEXT')
+    if 'kept_photo_id' not in trash_cols:
+        conn.execute('ALTER TABLE trash ADD COLUMN kept_photo_id INTEGER')
+    
     conn.execute('''
         CREATE TABLE IF NOT EXISTS trash (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             photo_id INTEGER,
             original_path TEXT NOT NULL,
             trash_path TEXT NOT NULL,
+            thumbnail_path TEXT,
             filename TEXT NOT NULL,
             deleted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            restored INTEGER DEFAULT 0
+            restored INTEGER DEFAULT 0,
+            duplicate_group_id TEXT,
+            kept_photo_id INTEGER
         )
     ''')
     
@@ -142,6 +179,24 @@ def init_db():
             PRIMARY KEY (album_id, photo_id)
         )
     ''')
+    
+    # Library paths table for managing scan sources with enable/disable
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS library_paths (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT UNIQUE NOT NULL,
+            enabled INTEGER DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # Sync PHOTO_LIBRARY_PATHS from config into library_paths on every startup
+    for p in PHOTO_LIBRARY_PATHS:
+        conn.execute(
+            'INSERT OR IGNORE INTO library_paths (path, enabled) VALUES (?, 1)',
+            (p,)
+        )
+    
     conn.commit()
     conn.close()
 
@@ -378,7 +433,11 @@ def get_file_creation_date(path):
     now = datetime.now()
     
     # 优先使用修改时间（mtime），它通常保留原始文件的拍摄/导出时间
-    mtime = datetime.fromtimestamp(stat.st_mtime)
+    try:
+        mtime = datetime.fromtimestamp(stat.st_mtime)
+    except (ValueError, OSError):
+        # 时间戳超出有效范围（如 year 60370），回退到当前时间
+        mtime = now
     
     # 检查修改时间是否合理（不是未来，不是太老）
     if mtime <= now and mtime.year >= 1990:
@@ -389,7 +448,7 @@ def get_file_creation_date(path):
         birthtime = datetime.fromtimestamp(stat.st_birthtime)
         if birthtime <= now and birthtime.year >= 1990:
             return birthtime
-    except AttributeError:
+    except (ValueError, OSError, AttributeError):
         pass
     
     # 如果 mtime 是毫秒时间戳（某些文件系统），尝试除以1000
@@ -404,8 +463,9 @@ def get_file_creation_date(path):
     # 都不行，返回 birthtime 或 mtime（不管是否合理，总比没有好）
     try:
         return datetime.fromtimestamp(stat.st_birthtime)
-    except AttributeError:
-        return mtime
+    except (ValueError, OSError, AttributeError):
+        # 最终回退到当前时间
+        return now
 
 
 def generate_thumbnail(image_path, thumb_path, max_size=THUMBNAIL_MAX_SIZE):
@@ -700,19 +760,32 @@ def scan_photos_fast():
         scan_status['added_count'] = 0
         scan_status['thumbnail_count'] = 0
         scan_status['error_count'] = 0
+        scan_status['current_file'] = ''
+        scan_status['start_time'] = datetime.now().isoformat()
+        scan_status['sources'] = {}
 
     try:
         # 阶段1：快速列出所有媒体文件
         print("=== 阶段1: 列出所有媒体文件 ===")
         media_files = []
-        for lib_path in PHOTO_LIBRARY_PATHS:
+        # 需要跳过的系统/内部目录
+        SKIP_DIRS = {'.filetransfer', 'backups', 'encoded-video', 'profile', 'thumbs', 'upload'}
+
+        # Get enabled library paths from DB
+        conn = get_db()
+        enabled_paths = [row['path'] for row in conn.execute(
+            'SELECT path FROM library_paths WHERE enabled = 1'
+        ).fetchall()]
+        conn.close()
+        
+        for lib_path in enabled_paths:
             if not os.path.exists(lib_path):
                 print(f"路径不存在，跳过: {lib_path}")
                 continue
             print(f"扫描路径: {lib_path}")
             for root, dirs, files in os.walk(lib_path):
-                # 跳过 FreeFileSync 临时同步文件夹
-                if '.filetransfer' in root.split(os.sep):
+                # 跳过系统/内部目录
+                if any(skip in root.split(os.sep) for skip in SKIP_DIRS):
                     continue
                 for filename in files:
                     ext = Path(filename).suffix.lower()
@@ -744,6 +817,11 @@ def scan_photos_fast():
         for i, (full_path, ext, source_path) in enumerate(media_files):
             with scan_lock:
                 scan_status['scanned_count'] = i + 1
+                scan_status['current_file'] = full_path
+                # 更新来源统计
+                if source_path not in scan_status['sources']:
+                    scan_status['sources'][source_path] = 0
+                scan_status['sources'][source_path] += 1
 
             if full_path in existing_paths:
                 continue
@@ -852,6 +930,7 @@ def scan_photos_fast():
         with scan_lock:
             scan_status['is_scanning'] = False
             scan_status['phase'] = 'idle'
+            scan_status['current_file'] = ''
 
 
 def generate_missing_thumbnails():
@@ -948,6 +1027,23 @@ def get_status():
         total = scan_status['total_count']
         scanned = scan_status['scanned_count']
         progress = round((scanned / total * 100), 1) if total > 0 else 0.0
+        
+        # 计算已用时间
+        elapsed_seconds = 0
+        if scan_status['start_time']:
+            try:
+                start = datetime.fromisoformat(scan_status['start_time'])
+                elapsed_seconds = int((datetime.now() - start).total_seconds())
+            except:
+                pass
+        
+        # 估算剩余时间
+        eta_seconds = 0
+        if scanned > 0 and total > scanned:
+            avg_time_per_file = elapsed_seconds / scanned
+            remaining_files = total - scanned
+            eta_seconds = int(avg_time_per_file * remaining_files)
+        
         return jsonify({
             'scanning': scan_status['is_scanning'],
             'phase': scan_status['phase'],
@@ -957,6 +1053,10 @@ def get_status():
             'added': scan_status['added_count'],
             'thumbnails': scan_status['thumbnail_count'],
             'errors': scan_status['error_count'],
+            'current_file': scan_status['current_file'],
+            'elapsed_seconds': elapsed_seconds,
+            'eta_seconds': eta_seconds,
+            'sources': scan_status['sources'],
         })
 
 
@@ -1087,7 +1187,13 @@ def get_photos():
         where_clause += ' AND (is_screenshot IS NULL OR is_screenshot = 0)'
     elif filter_type == 'screenshot':
         where_clause += ' AND is_screenshot = 1'
-    
+
+    # Filter out disabled library paths
+    where_clause += ''' AND (
+        source_path IS NULL
+        OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0)
+    )'''
+
     total = conn.execute(f'SELECT COUNT(*) FROM photos {where_clause}', params).fetchone()[0]
     
     query = f'''
@@ -1118,13 +1224,17 @@ def get_timeline():
     
     # 按年份月份日期统计
     rows = conn.execute('''
-        SELECT 
+        SELECT
             strftime('%Y', date_taken) as year,
             strftime('%m', date_taken) as month,
             strftime('%d', date_taken) as day,
             COUNT(*) as count
         FROM photos
         WHERE date_taken IS NOT NULL AND hidden = 0
+          AND (
+              source_path IS NULL
+              OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0)
+          )
         GROUP BY year, month, day
         ORDER BY year DESC, month DESC, day DESC
     ''').fetchall()
@@ -1607,9 +1717,9 @@ def delete_photo(photo_id):
         os.remove(photo['path'])
         
         conn.execute('''
-            INSERT INTO trash (photo_id, original_path, trash_path, filename)
-            VALUES (?, ?, ?, ?)
-        ''', (photo_id, photo['path'], str(trash_path), photo['filename']))
+            INSERT INTO trash (photo_id, original_path, trash_path, thumbnail_path, filename)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (photo_id, photo['path'], str(trash_path), photo.get('thumbnail_path'), photo['filename']))
         
         conn.execute('DELETE FROM photos WHERE id = ?', (photo_id,))
         conn.commit()
@@ -1662,8 +1772,12 @@ def get_hidden_photos():
     conn = get_db()
     photos = conn.execute('''
         SELECT id, path, filename, media_type, source_path, date_taken, width, height, thumbnail_path, file_size, duration, favorite, latitude, longitude, hidden
-        FROM photos 
+        FROM photos
         WHERE hidden = 1
+          AND (
+              source_path IS NULL
+              OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0)
+          )
         ORDER BY date_taken DESC
     ''').fetchall()
     conn.close()
@@ -1679,23 +1793,27 @@ def get_duplicates():
     offset = (page - 1) * per_page
     
     conn = get_db()
+    disabled_filter = '''(
+        source_path IS NULL
+        OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0)
+    )'''
     # Find groups with same filename and file_size, count > 1
-    rows = conn.execute('''
+    rows = conn.execute(f'''
         SELECT filename, file_size, COUNT(*) as cnt
         FROM photos
-        WHERE hidden = 0
+        WHERE hidden = 0 AND {disabled_filter}
         GROUP BY filename, file_size
         HAVING cnt > 1
         ORDER BY cnt DESC
         LIMIT ? OFFSET ?
     ''', (per_page, offset)).fetchall()
-    
+
     # Get total count
-    total_row = conn.execute('''
+    total_row = conn.execute(f'''
         SELECT COUNT(*) FROM (
             SELECT filename, file_size
             FROM photos
-            WHERE hidden = 0
+            WHERE hidden = 0 AND {disabled_filter}
             GROUP BY filename, file_size
             HAVING COUNT(*) > 1
         )
@@ -1710,6 +1828,10 @@ def get_duplicates():
             SELECT id, path, filename, media_type, source_path, thumbnail_path, file_size, width, height
             FROM photos
             WHERE filename = ? AND file_size = ? AND hidden = 0
+              AND (
+                  source_path IS NULL
+                  OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0)
+              )
             ORDER BY (width * height) DESC
         ''', (filename, file_size)).fetchall()
         
@@ -1770,9 +1892,9 @@ def batch_delete_photos():
             os.remove(photo['path'])
             
             conn.execute('''
-                INSERT INTO trash (photo_id, original_path, trash_path, filename)
-                VALUES (?, ?, ?, ?)
-            ''', (photo_id, photo['path'], str(trash_path), photo['filename']))
+                INSERT INTO trash (photo_id, original_path, trash_path, thumbnail_path, filename)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (photo_id, photo['path'], str(trash_path), photo.get('thumbnail_path'), photo['filename']))
             
             conn.execute('DELETE FROM photos WHERE id = ?', (photo_id,))
             deleted.append(photo_id)
@@ -1792,15 +1914,163 @@ def batch_delete_photos():
     })
 
 
+def do_cleanup_duplicates():
+    """后台执行重复照片清理"""
+    global cleanup_status
+    conn = get_db()
+    
+    disabled_filter = '''(
+        source_path IS NULL
+        OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0)
+    )'''
+    # 1. 找出所有重复组
+    groups = conn.execute(f'''
+        SELECT filename, file_size, COUNT(*) as cnt
+        FROM photos
+        WHERE hidden = 0 AND {disabled_filter}
+        GROUP BY filename, file_size
+        HAVING cnt > 1
+    ''').fetchall()
+
+    if not groups:
+        conn.close()
+        with cleanup_lock:
+            cleanup_status['is_running'] = False
+            cleanup_status['message'] = '没有重复照片需要清理'
+        return
+
+    total = len(groups)
+    with cleanup_lock:
+        cleanup_status['total_groups'] = total
+        cleanup_status['processed_groups'] = 0
+        cleanup_status['deleted_count'] = 0
+        cleanup_status['kept_count'] = 0
+        cleanup_status['failed_count'] = 0
+        cleanup_status['current_group'] = ''
+        cleanup_status['message'] = '清理中...'
+
+    deleted = []
+    failed = []
+    kept = []
+
+    for grp in groups:
+        filename = grp['filename']
+        file_size = grp['file_size']
+
+        with cleanup_lock:
+            cleanup_status['current_group'] = filename
+
+        photos = conn.execute(f'''
+            SELECT id, path, filename, width, height, file_size,
+                   COALESCE(width, 0) * COALESCE(height, 0) as resolution
+            FROM photos
+            WHERE filename = ? AND file_size = ? AND hidden = 0 AND {disabled_filter}
+            ORDER BY resolution DESC, file_size DESC, id ASC
+        ''', (filename, file_size)).fetchall()
+        
+        if len(photos) <= 1:
+            with cleanup_lock:
+                cleanup_status['processed_groups'] += 1
+            continue
+        
+        keep_id = photos[0]['id']
+        kept.append(keep_id)
+        
+        # Generate a group ID for this duplicate set
+        group_id = f"dup_{filename}_{file_size}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        for photo in photos[1:]:
+            photo_id = photo['id']
+            try:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                trash_filename = f"{timestamp}_{photo_id}_{photo['filename']}"
+                trash_path = Path(TRASH_DIR) / trash_filename
+                
+                shutil.copy2(photo['path'], trash_path)
+                os.remove(photo['path'])
+                
+                photo_row = conn.execute('SELECT thumbnail_path FROM photos WHERE id = ?', (photo_id,)).fetchone()
+                thumbnail_path = photo_row['thumbnail_path'] if photo_row else None
+                
+                conn.execute('''
+                    INSERT INTO trash (photo_id, original_path, trash_path, thumbnail_path, filename, duplicate_group_id, kept_photo_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (photo_id, photo['path'], str(trash_path), thumbnail_path, photo['filename'], group_id, keep_id))
+                
+                conn.execute('DELETE FROM photos WHERE id = ?', (photo_id,))
+                deleted.append(photo_id)
+            except Exception as e:
+                failed.append({'id': photo_id, 'reason': str(e)})
+        
+        with cleanup_lock:
+            cleanup_status['processed_groups'] += 1
+            cleanup_status['deleted_count'] = len(deleted)
+            cleanup_status['kept_count'] = len(kept)
+            cleanup_status['failed_count'] = len(failed)
+    
+    conn.commit()
+    conn.close()
+    clean_expired_trash()
+    
+    with cleanup_lock:
+        cleanup_status['is_running'] = False
+        cleanup_status['message'] = f'清理完成：保留 {len(kept)} 组，删除 {len(deleted)} 张'
+
+
+@app.route('/api/duplicates/cleanup', methods=['POST'])
+def cleanup_duplicates():
+    """启动一键清理重复照片后台任务"""
+    with cleanup_lock:
+        if cleanup_status['is_running']:
+            return jsonify({'success': False, 'message': '清理任务正在进行中'}), 429
+        cleanup_status['is_running'] = True
+        cleanup_status['total_groups'] = 0
+        cleanup_status['processed_groups'] = 0
+        cleanup_status['deleted_count'] = 0
+        cleanup_status['kept_count'] = 0
+        cleanup_status['failed_count'] = 0
+        cleanup_status['current_group'] = ''
+        cleanup_status['message'] = '准备中...'
+    
+    thread = threading.Thread(target=do_cleanup_duplicates, daemon=True)
+    thread.start()
+    
+    return jsonify({'success': True, 'message': '清理任务已启动'})
+
+
+@app.route('/api/duplicates/cleanup/status')
+def cleanup_duplicates_status():
+    """获取重复照片清理进度"""
+    with cleanup_lock:
+        total = cleanup_status['total_groups']
+        processed = cleanup_status['processed_groups']
+        pct = round((processed / total * 100), 1) if total > 0 else 0.0
+        return jsonify({
+            'is_running': cleanup_status['is_running'],
+            'total_groups': total,
+            'processed_groups': processed,
+            'progress_percent': pct,
+            'deleted_count': cleanup_status['deleted_count'],
+            'kept_count': cleanup_status['kept_count'],
+            'failed_count': cleanup_status['failed_count'],
+            'current_group': cleanup_status['current_group'],
+            'message': cleanup_status['message'],
+        })
+
+
 @app.route('/api/duplicates')
 def find_duplicates():
     """按 filename + file_size 分组查找重复照片（轻量级方案）"""
     conn = get_db()
-    # 获取所有非隐藏照片（包括视频）
+    # 获取所有非隐藏照片（包括视频），排除禁用路径
     photos = conn.execute('''
         SELECT id, path, filename, file_size, media_type, date_taken, width, height, thumbnail_path, duration
         FROM photos
         WHERE hidden = 0
+          AND (
+              source_path IS NULL
+              OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0)
+          )
     ''').fetchall()
     conn.close()
     
@@ -1883,7 +2153,14 @@ def scan_duplicates():
         try:
             # 1. 先检查并修复文件权限
             fixed_count = 0
-            for lib_path in PHOTO_LIBRARY_PATHS:
+            # Get enabled library paths from DB
+            conn = get_db()
+            enabled_paths = [row['path'] for row in conn.execute(
+                'SELECT path FROM library_paths WHERE enabled = 1'
+            ).fetchall()]
+            conn.close()
+            
+            for lib_path in enabled_paths:
                 if not os.path.exists(lib_path):
                     continue
                 for root, dirs, files in os.walk(lib_path):
@@ -1902,11 +2179,15 @@ def scan_duplicates():
             
             # 2. 扫描重复照片
             conn = get_db()
-            total = conn.execute('SELECT COUNT(*) FROM photos WHERE hidden = 0').fetchone()[0]
-            
-            rows = conn.execute('''
+            disabled_filter = '''(
+                source_path IS NULL
+                OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0)
+            )'''
+            total = conn.execute(f'SELECT COUNT(*) FROM photos WHERE hidden = 0 AND {disabled_filter}').fetchone()[0]
+
+            rows = conn.execute(f'''
                 SELECT filename, file_size, COUNT(*) as cnt
-                FROM photos WHERE hidden = 0
+                FROM photos WHERE hidden = 0 AND {disabled_filter}
                 GROUP BY filename, file_size HAVING cnt > 1
             ''').fetchall()
             
@@ -1950,27 +2231,89 @@ def scan_duplicates_status():
 @app.route('/api/trash')
 def get_trash():
     clean_expired_trash()
-    
+
     conn = get_db()
     items = conn.execute('''
         SELECT * FROM trash WHERE restored = 0
         ORDER BY deleted_at DESC
     ''').fetchall()
+
+    # Get disabled library paths to filter trash items
+    disabled_paths = [row['path'] for row in conn.execute(
+        'SELECT path FROM library_paths WHERE enabled = 0'
+    ).fetchall()]
     conn.close()
+
+    # Filter out items from disabled library paths
+    def _is_disabled(item):
+        orig = item['original_path'] or ''
+        for dp in disabled_paths:
+            if orig.startswith(dp + os.sep) or orig == dp:
+                return True
+        return False
+
+    items = [item for item in items if not _is_disabled(item)]
+
+    # Separate duplicate groups from regular deletions
+    duplicate_groups = {}
+    regular_items = []
     
-    result = []
     for item in items:
         remaining = TRASH_RETENTION_DAYS - (datetime.now() - datetime.fromisoformat(item['deleted_at'])).days
-        result.append({
+        thumb_url = None
+        if item['thumbnail_path'] and os.path.exists(item['thumbnail_path']):
+            thumb_url = f'/trash_thumbnail/{item["id"]}'
+        
+        entry = {
             'id': item['id'],
             'photo_id': item['photo_id'],
             'filename': item['filename'],
             'original_path': item['original_path'],
+            'thumbnail_url': thumb_url,
             'deleted_at': item['deleted_at'],
             'days_remaining': max(0, remaining)
-        })
+        }
+        
+        if item['duplicate_group_id']:
+            group_id = item['duplicate_group_id']
+            if group_id not in duplicate_groups:
+                duplicate_groups[group_id] = {
+                    'group_id': group_id,
+                    'filename': item['filename'],
+                    'kept_photo_id': item['kept_photo_id'],
+                    'deleted_at': item['deleted_at'],
+                    'days_remaining': max(0, remaining),
+                    'items': []
+                }
+            duplicate_groups[group_id]['items'].append(entry)
+        else:
+            regular_items.append(entry)
     
-    return jsonify(result)
+    # Fetch kept photo info for each duplicate group
+    conn = get_db()
+    for group in duplicate_groups.values():
+        if group['kept_photo_id']:
+            kept = conn.execute(
+                'SELECT id, path, filename, thumbnail_path FROM photos WHERE id = ?',
+                (group['kept_photo_id'],)
+            ).fetchone()
+            if kept:
+                group['kept_photo'] = {
+                    'id': kept['id'],
+                    'path': kept['path'],
+                    'filename': kept['filename'],
+                    'thumbnail_url': f'/thumbnail/{kept["id"]}' if kept['thumbnail_path'] else None
+                }
+            else:
+                group['kept_photo'] = None
+        else:
+            group['kept_photo'] = None
+    conn.close()
+    
+    return jsonify({
+        'duplicate_groups': list(duplicate_groups.values()),
+        'regular_items': regular_items
+    })
 
 
 @app.route('/api/trash/<int:trash_id>/restore', methods=['POST'])
@@ -1982,22 +2325,101 @@ def restore_photo(trash_id):
         return jsonify({'error': 'Not found'}), 404
     
     try:
-        if os.path.exists(item['trash_path']):
-            os.makedirs(os.path.dirname(item['original_path']), exist_ok=True)
-            shutil.move(item['trash_path'], item['original_path'])
-        
+        if not os.path.exists(item['trash_path']):
+            conn.close()
+            return jsonify({'error': 'Trash file not found'}), 404
+
+        os.makedirs(os.path.dirname(item['original_path']), exist_ok=True)
+        shutil.move(item['trash_path'], item['original_path'])
+
         conn.execute('UPDATE trash SET restored = 1 WHERE id = ?', (trash_id,))
         conn.commit()
-        
+
         # 启动快速扫描来重新入库恢复的文件
         thread = threading.Thread(target=scan_photos_fast, daemon=True)
         thread.start()
-        
+
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
     finally:
         conn.close()
+
+
+@app.route('/api/trash/restore_all', methods=['POST'])
+def restore_all_trash():
+    """还原回收站中所有未还原的项目"""
+    conn = get_db()
+    items = conn.execute('SELECT * FROM trash WHERE restored = 0').fetchall()
+    
+    if not items:
+        conn.close()
+        return jsonify({'success': True, 'restored_count': 0, 'message': '回收站是空的'})
+    
+    restored = []
+    failed = []
+
+    for item in items:
+        try:
+            if not os.path.exists(item['trash_path']):
+                failed.append({'id': item['id'], 'reason': 'Trash file not found'})
+                continue
+
+            os.makedirs(os.path.dirname(item['original_path']), exist_ok=True)
+            shutil.move(item['trash_path'], item['original_path'])
+
+            conn.execute('UPDATE trash SET restored = 1 WHERE id = ?', (item['id'],))
+            restored.append(item['id'])
+        except Exception as e:
+            failed.append({'id': item['id'], 'reason': str(e)})
+    
+    conn.commit()
+    conn.close()
+    
+    # 启动快速扫描来重新入库恢复的文件
+    if restored:
+        thread = threading.Thread(target=scan_photos_fast, daemon=True)
+        thread.start()
+    
+    return jsonify({
+        'success': True,
+        'restored_count': len(restored),
+        'failed_count': len(failed),
+        'failed': failed,
+        'message': f'还原完成：成功 {len(restored)} 张，失败 {len(failed)} 张'
+    })
+
+
+@app.route('/api/trash/delete_all', methods=['POST'])
+def delete_all_trash():
+    """永久删除回收站中所有项目"""
+    conn = get_db()
+    items = conn.execute('SELECT * FROM trash WHERE restored = 0').fetchall()
+    
+    if not items:
+        conn.close()
+        return jsonify({'success': True, 'deleted_count': 0, 'message': '回收站是空的'})
+    
+    deleted_count = 0
+    for item in items:
+        try:
+            if os.path.exists(item['trash_path']):
+                os.remove(item['trash_path'])
+            if item['thumbnail_path'] and os.path.exists(item['thumbnail_path']):
+                os.remove(item['thumbnail_path'])
+            conn.execute('DELETE FROM trash WHERE id = ?', (item['id'],))
+            deleted_count += 1
+        except Exception as e:
+            print(f"Error deleting trash item {item['id']}: {e}")
+            
+    conn.commit()
+    conn.close()
+    
+    return jsonify({
+        'success': True,
+        'deleted_count': deleted_count,
+        'message': f'已永久删除 {deleted_count} 个项目'
+    })
 
 
 @app.route('/api/trash/<int:trash_id>/permanent_delete', methods=['POST'])
@@ -2011,6 +2433,9 @@ def permanent_delete(trash_id):
     try:
         if os.path.exists(item['trash_path']):
             os.remove(item['trash_path'])
+        # Also delete the thumbnail if it exists
+        if item['thumbnail_path'] and os.path.exists(item['thumbnail_path']):
+            os.remove(item['thumbnail_path'])
         
         conn.execute('DELETE FROM trash WHERE id = ?', (trash_id,))
         conn.commit()
@@ -2021,34 +2446,55 @@ def permanent_delete(trash_id):
         conn.close()
 
 
+@app.route('/trash_thumbnail/<int:trash_id>')
+def trash_thumbnail(trash_id):
+    """Serve thumbnail for a trashed item"""
+    conn = get_db()
+    item = conn.execute('SELECT thumbnail_path FROM trash WHERE id = ?', (trash_id,)).fetchone()
+    conn.close()
+    
+    if not item or not item['thumbnail_path']:
+        return '', 404
+    
+    thumb_path = Path(item['thumbnail_path'])
+    if thumb_path.exists():
+        return send_file(str(thumb_path))
+    
+    return '', 404
+
+
 @app.route('/api/stats')
 def get_stats():
     conn = get_db()
-    total = conn.execute('SELECT COUNT(*) FROM photos WHERE hidden = 0').fetchone()[0]
-    photos = conn.execute('SELECT COUNT(*) FROM photos WHERE media_type = "image" AND hidden = 0').fetchone()[0]
-    videos = conn.execute('SELECT COUNT(*) FROM photos WHERE media_type = "video" AND hidden = 0').fetchone()[0]
-    favorites = conn.execute('SELECT COUNT(*) FROM photos WHERE favorite = 1 AND hidden = 0').fetchone()[0]
+    disabled_filter = '''(
+        source_path IS NULL
+        OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0)
+    )'''
+    total = conn.execute(f'SELECT COUNT(*) FROM photos WHERE hidden = 0 AND {disabled_filter}').fetchone()[0]
+    photos = conn.execute(f'SELECT COUNT(*) FROM photos WHERE media_type = "image" AND hidden = 0 AND {disabled_filter}').fetchone()[0]
+    videos = conn.execute(f'SELECT COUNT(*) FROM photos WHERE media_type = "video" AND hidden = 0 AND {disabled_filter}').fetchone()[0]
+    favorites = conn.execute(f'SELECT COUNT(*) FROM photos WHERE favorite = 1 AND hidden = 0 AND {disabled_filter}').fetchone()[0]
     trash = conn.execute('SELECT COUNT(*) FROM trash WHERE restored = 0').fetchone()[0]
-    hidden = conn.execute('SELECT COUNT(*) FROM photos WHERE hidden = 1').fetchone()[0]
-    sources = conn.execute('SELECT COUNT(DISTINCT source_path) FROM photos WHERE hidden = 0').fetchone()[0]
-    
-    oldest = conn.execute('SELECT date_taken FROM photos WHERE hidden = 0 ORDER BY date_taken ASC LIMIT 1').fetchone()
-    newest = conn.execute('SELECT date_taken FROM photos WHERE hidden = 0 ORDER BY date_taken DESC LIMIT 1').fetchone()
-    
+    hidden = conn.execute(f'SELECT COUNT(*) FROM photos WHERE hidden = 1 AND {disabled_filter}').fetchone()[0]
+    sources = conn.execute(f'SELECT COUNT(DISTINCT source_path) FROM photos WHERE hidden = 0 AND {disabled_filter}').fetchone()[0]
+
+    oldest = conn.execute(f'SELECT date_taken FROM photos WHERE hidden = 0 AND {disabled_filter} ORDER BY date_taken ASC LIMIT 1').fetchone()
+    newest = conn.execute(f'SELECT date_taken FROM photos WHERE hidden = 0 AND {disabled_filter} ORDER BY date_taken DESC LIMIT 1').fetchone()
+
     db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
-    
+
     # Count duplicate groups
-    dup_rows = conn.execute('''
+    dup_rows = conn.execute(f'''
         SELECT COUNT(*) FROM (
             SELECT filename, file_size
             FROM photos
-            WHERE hidden = 0
+            WHERE hidden = 0 AND {disabled_filter}
             GROUP BY filename, file_size
             HAVING COUNT(*) > 1
         )
     ''').fetchone()
     duplicates = dup_rows[0] if dup_rows else 0
-    
+
     conn.close()
     
     return jsonify({
@@ -2066,18 +2512,120 @@ def get_stats():
     })
 
 
+@app.route('/api/library_paths')
+def get_library_paths():
+    """Get all library paths with their enabled status"""
+    conn = get_db()
+    rows = conn.execute(
+        'SELECT id, path, enabled FROM library_paths ORDER BY created_at'
+    ).fetchall()
+    conn.close()
+    
+    result = []
+    for row in rows:
+        path = row['path']
+        # Count photos for this source
+        conn2 = get_db()
+        count = conn2.execute(
+            'SELECT COUNT(*) FROM photos WHERE source_path = ?',
+            (path,)
+        ).fetchone()[0]
+        conn2.close()
+        result.append({
+            'id': row['id'],
+            'path': path,
+            'enabled': bool(row['enabled']),
+            'count': count
+        })
+    return jsonify(result)
+
+
+@app.route('/api/library_paths', methods=['POST'])
+def add_library_path():
+    """Add a new library path"""
+    data = request.get_json()
+    path = data.get('path', '').strip()
+    
+    if not path:
+        return jsonify({'success': False, 'error': 'Path is required'}), 400
+    
+    if not os.path.exists(path):
+        return jsonify({'success': False, 'error': 'Path does not exist'}), 400
+    
+    if not os.path.isdir(path):
+        return jsonify({'success': False, 'error': 'Path is not a directory'}), 400
+    
+    # Normalize path
+    path = os.path.abspath(path)
+    
+    conn = get_db()
+    try:
+        conn.execute(
+            'INSERT INTO library_paths (path, enabled) VALUES (?, 1)',
+            (path,)
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({'success': True, 'path': path})
+    except sqlite3.IntegrityError:
+        conn.close()
+        return jsonify({'success': False, 'error': 'Path already exists'}), 409
+
+
+@app.route('/api/library_paths/<int:path_id>', methods=['DELETE'])
+def delete_library_path(path_id):
+    """Delete a library path (does not delete photos from DB)"""
+    conn = get_db()
+    row = conn.execute(
+        'SELECT path FROM library_paths WHERE id = ?', (path_id,)
+    ).fetchone()
+    
+    if not row:
+        conn.close()
+        return jsonify({'success': False, 'error': 'Path not found'}), 404
+    
+    conn.execute('DELETE FROM library_paths WHERE id = ?', (path_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+
+@app.route('/api/library_paths/<int:path_id>/toggle', methods=['POST'])
+def toggle_library_path(path_id):
+    """Toggle enabled status of a library path"""
+    conn = get_db()
+    row = conn.execute(
+        'SELECT enabled FROM library_paths WHERE id = ?', (path_id,)
+    ).fetchone()
+    
+    if not row:
+        conn.close()
+        return jsonify({'success': False, 'error': 'Path not found'}), 404
+    
+    new_enabled = 0 if row['enabled'] else 1
+    conn.execute(
+        'UPDATE library_paths SET enabled = ? WHERE id = ?',
+        (new_enabled, path_id)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'enabled': bool(new_enabled)})
+
+
 @app.route('/api/sources')
 def get_sources():
     conn = get_db()
     rows = conn.execute('''
-        SELECT source_path, COUNT(*) as count 
-        FROM photos 
-        WHERE source_path IS NOT NULL AND hidden = 0
-        GROUP BY source_path
+        SELECT p.source_path, COUNT(*) as count
+        FROM photos p
+        LEFT JOIN library_paths lp ON p.source_path = lp.path
+        WHERE p.source_path IS NOT NULL AND p.hidden = 0
+          AND (lp.enabled IS NULL OR lp.enabled = 1)
+        GROUP BY p.source_path
         ORDER BY count DESC
     ''').fetchall()
     conn.close()
-    
+
     result = []
     for row in rows:
         path = row['source_path'] or '未知'
@@ -2114,14 +2662,16 @@ def get_album_photos(album_id):
     filter_type = request.args.get('filter_type', 'all', type=str)
     conn = get_db()
     
-    where_clause = 'ap.album_id = ? AND p.hidden = 0'
+    where_clause = '''ap.album_id = ? AND p.hidden = 0
+        AND (p.source_path IS NULL
+             OR p.source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0))'''
     params = [album_id]
-    
+
     if filter_type == 'photo':
         where_clause += ' AND (p.is_screenshot IS NULL OR p.is_screenshot = 0)'
     elif filter_type == 'screenshot':
         where_clause += ' AND p.is_screenshot = 1'
-    
+
     photos = conn.execute(f'''
         SELECT p.id, p.path, p.filename, p.media_type, p.date_taken, p.width, p.height, p.thumbnail_path, p.file_size, p.duration, p.favorite, p.hidden, p.is_screenshot
         FROM photos p
@@ -2140,9 +2690,13 @@ def backfill_gps(batch_size=200, progress_callback=None):
     """为已有照片批量补录 GPS 数据。跳过已有 lat/lon 的记录。
     progress_callback: 可选的回调函数，接收 (processed, total, updated)"""
     conn = get_db()
+    disabled_filter = '''(
+        source_path IS NULL
+        OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0)
+    )'''
     # 统计需要处理的记录数
     total_missing = conn.execute(
-        'SELECT COUNT(*) FROM photos WHERE latitude IS NULL AND longitude IS NULL AND media_type = "image"'
+        f'SELECT COUNT(*) FROM photos WHERE latitude IS NULL AND longitude IS NULL AND media_type = "image" AND {disabled_filter}'
     ).fetchone()[0]
     if total_missing == 0:
         conn.close()
@@ -2162,8 +2716,8 @@ def backfill_gps(batch_size=200, progress_callback=None):
             break
 
         rows = conn.execute(
-            '''SELECT id, path FROM photos
-               WHERE latitude IS NULL AND longitude IS NULL AND media_type = "image"
+            f'''SELECT id, path FROM photos
+               WHERE latitude IS NULL AND longitude IS NULL AND media_type = "image" AND {disabled_filter}
                LIMIT ?''',
             (batch_size,)
         ).fetchall()
@@ -2288,7 +2842,9 @@ def get_map_photos():
     bounds = request.args.get('bounds', '', type=str)
 
     conn = get_db()
-    where_clause = 'WHERE latitude IS NOT NULL AND longitude IS NOT NULL AND hidden = 0'
+    where_clause = '''WHERE latitude IS NOT NULL AND longitude IS NOT NULL AND hidden = 0
+        AND (source_path IS NULL
+             OR source_path NOT IN (SELECT path FROM library_paths WHERE enabled = 0))'''
     params = []
 
     if bounds:
@@ -2366,7 +2922,14 @@ def check_permissions():
     sample_paths = []
     MAX_SAMPLE = 100  # 最多检查 100 个文件
     
-    for lib_path in PHOTO_LIBRARY_PATHS:
+    # Get enabled library paths from DB
+    conn = get_db()
+    enabled_paths = [row['path'] for row in conn.execute(
+        'SELECT path FROM library_paths WHERE enabled = 1'
+    ).fetchall()]
+    conn.close()
+    
+    for lib_path in enabled_paths:
         if not os.path.exists(lib_path):
             continue
         for root, dirs, files in os.walk(lib_path):
@@ -2389,7 +2952,7 @@ def check_permissions():
         'sample_count': min(total, MAX_SAMPLE),
         'sample_paths': sample_paths[:5],
         'user': getpass.getuser(),
-        'library_path': PHOTO_LIBRARY_PATHS[0] if PHOTO_LIBRARY_PATHS else ''
+        'library_path': enabled_paths[0] if enabled_paths else ''
     })
 
 

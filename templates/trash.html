@@ -90,15 +90,210 @@
         }
         .back-link {
             display: inline-block;
-            margin-top: 20px;
             color: var(--text-secondary);
             text-decoration: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            transition: background 0.2s;
+        }
+        .back-link:hover {
+            background: var(--bg-hover);
+        }
+        .trash-header-actions {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        .btn-restore-all {
+            display: inline-flex;
+            align-items: center;
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-restore-all:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        /* Duplicate group styles */
+        .dup-section-title {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            padding: 20px 20px 10px;
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .dup-section-title svg {
+            color: var(--accent-color);
+        }
+        .dup-groups-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 15px;
+            padding: 10px 20px 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .dup-group-card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+        }
+        .dup-group-header {
+            padding: 14px 16px;
+            background: var(--bg-hover);
+            border-bottom: 1px solid var(--border-color);
+        }
+        .dup-group-header .dup-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.75rem;
+            color: var(--accent-color);
+            background: rgba(var(--accent-rgb), 0.1);
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-bottom: 6px;
+        }
+        .dup-group-header .dup-filename {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            word-break: break-all;
+            line-height: 1.3;
+        }
+        .dup-group-header .dup-meta {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+        .dup-kept-photo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            background: rgba(var(--success-rgb, 76, 175, 80), 0.05);
+            border-bottom: 1px solid var(--border-color);
+        }
+        .dup-kept-photo img {
+            width: 48px;
+            height: 48px;
+            object-fit: cover;
+            border-radius: 6px;
+            flex-shrink: 0;
+        }
+        .dup-kept-photo .kept-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .dup-kept-photo .kept-label {
+            font-size: 0.75rem;
+            color: var(--success-color, #4caf50);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .dup-kept-photo .kept-name {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .dup-kept-photo a {
+            font-size: 0.75rem;
+            color: var(--accent-color);
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        .dup-kept-photo a:hover {
+            text-decoration: underline;
+        }
+        .dup-thumbs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 12px 16px;
+        }
+        .dup-thumb {
+            position: relative;
+            width: 72px;
+            height: 72px;
+            border-radius: 6px;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .dup-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .dup-thumb .dup-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(0,0,0,0.6);
+            color: #fff;
+            font-size: 0.65rem;
+            padding: 2px 4px;
+            text-align: center;
+        }
+        .dup-group-actions {
+            display: flex;
+            gap: 8px;
+            padding: 0 16px 12px;
+        }
+        .dup-group-actions button {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .dup-group-actions .btn-dup-delete {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+        .dup-group-actions .btn-dup-delete:hover {
+            background: #e53935;
+            color: #fff;
+        }
+        .regular-section-title {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            padding: 20px 20px 10px;
+            max-width: 1200px;
+            margin: 0 auto;
         }
         @media (max-width: 767px) {
             .trash-grid {
                 grid-template-columns: repeat(2, 1fr);
                 gap: 10px;
                 padding: 10px;
+            }
+            .dup-groups-grid {
+                grid-template-columns: 1fr;
+                padding: 10px;
+            }
+            .dup-thumb {
+                width: 60px;
+                height: 60px;
             }
         }
     </style>
@@ -107,7 +302,22 @@
     <div class="trash-header">
         <h1 data-i18n="trash.header">回收站</h1>
         <p data-i18n="trash.description">删除的照片会在这里保留 30 天，之后自动永久删除</p>
-        <a href="/" class="back-link" data-i18n="trash.backToAlbum">← 返回相册</a>
+        <div class="trash-header-actions">
+            <button class="btn btn-primary btn-restore-all" onclick="restoreAll()" id="restore-all-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px">
+                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                    <path d="M3 3v5h5"/>
+                </svg>
+                <span data-i18n="trash.restoreAll">全部还原</span>
+            </button>
+            <button class="btn btn-danger btn-restore-all" onclick="deleteAll()" id="delete-all-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:middle;margin-right:4px">
+                    <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2M10 11v6M14 11v6"/>
+                </svg>
+                <span data-i18n="trash.deleteAll">全部删除</span>
+            </button>
+            <a href="/" class="back-link" data-i18n="trash.backToAlbum">← 返回相册</a>
+        </div>
     </div>
 
     <div id="trash-content">
@@ -119,11 +329,13 @@
         async function loadTrash() {
             try {
                 const response = await fetch('/api/trash');
-                const items = await response.json();
+                const data = await response.json();
                 
                 const container = document.getElementById('trash-content');
+                const dupGroups = data.duplicate_groups || [];
+                const regularItems = data.regular_items || [];
                 
-                if (items.length === 0) {
+                if (dupGroups.length === 0 && regularItems.length === 0) {
                     container.innerHTML = `
                         <div class="empty-state">
                             <p data-i18n="empty.trashEmpty">回收站是空的</p>
@@ -132,36 +344,107 @@
                     return;
                 }
                 
-                const grid = document.createElement('div');
-                grid.className = 'trash-grid';
+                let html = '';
                 
-                items.forEach(item => {
-                    const div = document.createElement('div');
-                    div.className = 'trash-item';
-                    div.dataset.id = item.id;
-                    
-                    // 从原始路径推断缩略图URL
-                    const thumbUrl = `/thumbnail/${item.photo_id}`;
-                    
-                    div.innerHTML = `
-                        <img src="${thumbUrl}" alt="${item.filename}" loading="lazy" 
-                             onerror="this.style.display='none'">
-                        <div class="trash-item-info">
-                            <div class="filename">${item.filename}</div>
-                            <div class="meta">${new Date(item.deleted_at).toLocaleString(currentLang === 'zh' ? 'zh-CN' : currentLang)}</div>
-                            <div class="countdown">${t('trash.daysRemaining', item.days_remaining)}</div>
+                // Duplicate groups section
+                if (dupGroups.length > 0) {
+                    html += `
+                        <div class="dup-section-title">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                            </svg>
+                            ${t('trash.duplicateGroups', dupGroups.length)}
                         </div>
-                        <div class="trash-actions">
-                            <button class="btn-restore" onclick="restorePhoto(${item.id})">${t('action.restore')}</button>
-                            <button class="btn-perm-delete" onclick="permanentDelete(${item.id})">${t('action.permDelete')}</button>
-                        </div>
+                        <div class="dup-groups-grid">
                     `;
                     
-                    grid.appendChild(div);
-                });
+                    dupGroups.forEach(group => {
+                        const kept = group.kept_photo;
+                        const items = group.items || [];
+                        const keptThumb = kept && kept.thumbnail_url ? kept.thumbnail_url : '/static/placeholder.jpg';
+                        const keptLink = kept ? `/photo/${kept.id}` : '#';
+                        
+                        html += `
+                            <div class="dup-group-card" data-group-id="${group.group_id}">
+                                <div class="dup-group-header">
+                                    <div class="dup-badge">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                                            <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+                                        </svg>
+                                        ${t('trash.duplicateBadge')}
+                                    </div>
+                                    <div class="dup-filename">${group.filename}</div>
+                                    <div class="dup-meta">${t('trash.keptOne', items.length)} · ${t('trash.daysRemaining', group.days_remaining)}</div>
+                                </div>
+                                ${kept ? `
+                                <div class="dup-kept-photo">
+                                    <img src="${keptThumb}" alt="${kept.filename}" loading="lazy" onerror="this.src='/static/placeholder.jpg'">
+                                    <div class="kept-info">
+                                        <div class="kept-label">
+                                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <polyline points="20 6 9 17 4 12"/>
+                                            </svg>
+                                            ${t('trash.keptInAlbum')}
+                                        </div>
+                                        <div class="kept-name">${kept.filename}</div>
+                                    </div>
+                                    <a href="${keptLink}" target="_blank">${t('trash.viewKept')}</a>
+                                </div>
+                                ` : ''}
+                                <div class="dup-thumbs">
+                                    ${items.map(item => `
+                                        <div class="dup-thumb" data-id="${item.id}">
+                                            <img src="${item.thumbnail_url || '/static/placeholder.jpg'}" alt="${item.filename}" loading="lazy" onerror="this.src='/static/placeholder.jpg'">
+                                            <div class="dup-overlay">${t('trash.deletedCopy')}</div>
+                                        </div>
+                                    `).join('')}
+                                </div>
+                                <div class="dup-group-actions">
+                                    <button class="btn-restore" onclick="restoreDupGroup('${group.group_id}')">${t('trash.restoreGroup')}</button>
+                                    <button class="btn-dup-delete" onclick="deleteDupGroup('${group.group_id}')">${t('trash.deleteGroup')}</button>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    
+                    html += '</div>';
+                }
                 
-                container.innerHTML = '';
-                container.appendChild(grid);
+                // Regular items section
+                if (regularItems.length > 0) {
+                    html += `
+                        <div class="regular-section-title">${t('trash.otherDeletions', regularItems.length)}</div>
+                        <div class="trash-grid">
+                    `;
+                    
+                    regularItems.forEach(item => {
+                        const thumbUrl = item.thumbnail_url || '/static/placeholder.jpg';
+                        const hasThumb = !!item.thumbnail_url;
+                        
+                        html += `
+                            <div class="trash-item" data-id="${item.id}">
+                                <img src="${thumbUrl}" alt="${item.filename}" loading="lazy" 
+                                     onerror="this.src='/static/placeholder.jpg'"
+                                     style="${hasThumb ? '' : 'opacity:0.3'}">
+                                <div class="trash-item-info">
+                                    <div class="filename">${item.filename}</div>
+                                    <div class="meta">${new Date(item.deleted_at).toLocaleString(currentLang === 'zh' ? 'zh-CN' : currentLang)}</div>
+                                    <div class="countdown">${t('trash.daysRemaining', item.days_remaining)}</div>
+                                </div>
+                                <div class="trash-actions">
+                                    <button class="btn-restore" onclick="restorePhoto(${item.id})">${t('action.restore')}</button>
+                                    <button class="btn-perm-delete" onclick="permanentDelete(${item.id})">${t('action.permDelete')}</button>
+                                </div>
+                            </div>
+                        `;
+                    });
+                    
+                    html += '</div>';
+                }
+                
+                container.innerHTML = html;
             } catch (err) {
                 console.error('加载失败:', err);
             }
@@ -174,14 +457,104 @@
                 const response = await fetch(`/api/trash/${id}/restore`, { method: 'POST' });
                 const data = await response.json();
                 if (data.success) {
-                    document.querySelector(`.trash-item[data-id="${id}"]`).remove();
-                    // 检查是否为空
-                    if (document.querySelectorAll('.trash-item').length === 0) {
+                    const el = document.querySelector(`.trash-item[data-id="${id}"]`);
+                    if (el) el.remove();
+                    if (document.querySelectorAll('.trash-item, .dup-group-card').length === 0) {
                         loadTrash();
                     }
                 }
             } catch (err) {
                 alert(t('dialog.restoreFailed'));
+            }
+        }
+        
+        async function restoreDupGroup(groupId) {
+            if (!confirm(t('trash.restoreGroupConfirm'))) return;
+            
+            const card = document.querySelector(`.dup-group-card[data-group-id="${groupId}"]`);
+            const items = card ? card.querySelectorAll('.dup-thumb') : [];
+            
+            for (const thumb of items) {
+                const id = thumb.dataset.id;
+                try {
+                    await fetch(`/api/trash/${id}/restore`, { method: 'POST' });
+                } catch (e) {
+                    console.error('Restore failed for', id, e);
+                }
+            }
+            
+            if (card) card.remove();
+            if (document.querySelectorAll('.trash-item, .dup-group-card').length === 0) {
+                loadTrash();
+            }
+        }
+        
+        async function deleteDupGroup(groupId) {
+            if (!confirm(t('trash.deleteGroupConfirm'))) return;
+            
+            const card = document.querySelector(`.dup-group-card[data-group-id="${groupId}"]`);
+            const items = card ? card.querySelectorAll('.dup-thumb') : [];
+            
+            for (const thumb of items) {
+                const id = thumb.dataset.id;
+                try {
+                    await fetch(`/api/trash/${id}/permanent_delete`, { method: 'POST' });
+                } catch (e) {
+                    console.error('Delete failed for', id, e);
+                }
+            }
+            
+            if (card) card.remove();
+            if (document.querySelectorAll('.trash-item, .dup-group-card').length === 0) {
+                loadTrash();
+            }
+        }
+        
+        async function restoreAll() {
+            if (!confirm(t('trash.restoreAllConfirm'))) return;
+            
+            const btn = document.getElementById('restore-all-btn');
+            btn.disabled = true;
+            btn.querySelector('span').textContent = t('trash.restoring') || '还原中...';
+            
+            try {
+                const response = await fetch('/api/trash/restore_all', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    alert(data.message);
+                    loadTrash();
+                } else {
+                    alert(data.message || '还原失败');
+                }
+            } catch (err) {
+                alert(t('trash.restoreAllFailed') || '全部还原失败');
+            } finally {
+                btn.disabled = false;
+                btn.querySelector('span').textContent = t('trash.restoreAll');
+            }
+        }
+        
+        async function deleteAll() {
+            if (!confirm(t('trash.deleteAllConfirm'))) return;
+            
+            const btn = document.getElementById('delete-all-btn');
+            btn.disabled = true;
+            btn.querySelector('span').textContent = t('trash.deleting') || '删除中...';
+            
+            try {
+                const response = await fetch('/api/trash/delete_all', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    alert(data.message);
+                    loadTrash();
+                } else {
+                    alert(data.message || '删除失败');
+                }
+            } catch (err) {
+                alert('删除失败');
+            } finally {
+                btn.disabled = false;
+                btn.querySelector('span').textContent = t('trash.deleteAll');
             }
         }
         
@@ -192,8 +565,9 @@
                 const response = await fetch(`/api/trash/${id}/permanent_delete`, { method: 'POST' });
                 const data = await response.json();
                 if (data.success) {
-                    document.querySelector(`.trash-item[data-id="${id}"]`).remove();
-                    if (document.querySelectorAll('.trash-item').length === 0) {
+                    const el = document.querySelector(`.trash-item[data-id="${id}"]`);
+                    if (el) el.remove();
+                    if (document.querySelectorAll('.trash-item, .dup-group-card').length === 0) {
                         loadTrash();
                     }
                 }
