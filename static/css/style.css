@@ -796,12 +796,16 @@ body.selection-mode .photo-checkbox {
     object-fit: contain;
     border-radius: 4px;
     user-select: none;
+    touch-action: none;
+    -webkit-user-drag: none;
+    transition: transform 0.2s ease;
 }
 
 #viewer-media-container video {
     max-width: 100%;
     max-height: calc(100vh - 160px);
     border-radius: 4px;
+    touch-action: none;
 }
 
 /* 关闭按钮 */
@@ -825,6 +829,29 @@ body.selection-mode .photo-checkbox {
 }
 
 .viewer-close:hover {
+    background: rgba(255,255,255,0.2);
+}
+
+/* 移动端信息面板切换按钮 */
+.viewer-info-toggle {
+    display: none;
+    position: absolute;
+    top: 12px;
+    right: 16px;
+    width: 40px;
+    height: 40px;
+    background: rgba(255,255,255,0.1);
+    border: none;
+    border-radius: 50%;
+    color: #fff;
+    cursor: pointer;
+    z-index: 1002;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+}
+
+.viewer-info-toggle:hover {
     background: rgba(255,255,255,0.2);
 }
 
@@ -1698,11 +1725,17 @@ a.exif-value:hover {
 
     .photo-grid {
         grid-template-columns: repeat(3, 1fr);
-        gap: 4px;
+        gap: 6px;
     }
 
     .photo-item {
-        border-radius: 4px;
+        border-radius: 6px;
+        -webkit-tap-highlight-color: transparent;
+    }
+
+    .photo-item:active {
+        transform: scale(0.97);
+        transition: transform 0.1s ease;
     }
 
     .photo-item .photo-date {
@@ -1711,25 +1744,56 @@ a.exif-value:hover {
         padding: 12px 4px 4px;
     }
 
+    /* 移动端触摸时显示操作按钮 */
+    .photo-item .photo-actions {
+        opacity: 0;
+        transition: opacity 0.15s;
+    }
+
+    .photo-item:active .photo-actions,
+    .photo-item.show-actions .photo-actions {
+        opacity: 1;
+    }
+
     .photo-checkbox {
         width: 20px;
         height: 20px;
         font-size: 11px;
     }
 
+    .day-label {
+        font-weight: 600;
+        margin: 10px 0 8px;
+    }
+
     .viewer {
+        padding: 0;
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr auto auto;
+        grid-template-areas:
+            "main"
+            "sidebar"
+            "filmstrip";
+    }
+
+    .viewer-main {
+        padding: 0;
+    }
+
+    .viewer-media-wrap {
         padding: 0;
     }
 
     #viewer-media-container img {
         max-width: 100%;
-        max-height: 65vh;
+        max-height: 70vh;
         border-radius: 0;
     }
 
     .viewer-close {
-        top: 10px;
+        top: env(safe-area-inset-top, 10px);
         right: 10px;
+        left: auto;
         font-size: 2rem;
         padding: 15px;
         background: rgba(0,0,0,0.4);
@@ -1741,10 +1805,19 @@ a.exif-value:hover {
         justify-content: center;
     }
 
+    .viewer-info-toggle {
+        display: flex;
+        top: env(safe-area-inset-top, 10px);
+        right: 64px;
+    }
+
     .viewer-nav {
         display: block;
-        font-size: 1.5rem;
-        padding: 30px 10px;
+        font-size: 1.2rem;
+        padding: 20px 8px;
+        opacity: 0.25;
+        width: 40px;
+        height: 60px;
     }
 
     .viewer-nav.viewer-prev {
@@ -1756,9 +1829,51 @@ a.exif-value:hover {
     }
 
     .viewer-counter {
-        margin-top: 10px;
+        margin-top: 6px;
         font-size: 0.8rem;
         padding: 0 10px;
+    }
+
+    /* 移动端信息面板改为底部抽屉 */
+    .viewer-sidebar {
+        display: none;
+        grid-area: sidebar;
+        border-left: none;
+        border-top: 1px solid var(--border);
+        max-height: 45vh;
+        min-height: 0;
+    }
+
+    .viewer-sidebar.mobile-open {
+        display: flex;
+    }
+
+    .viewer-sidebar-header {
+        padding: 10px 14px;
+        font-size: 0.85rem;
+    }
+
+    .viewer-exif {
+        padding: 8px 14px;
+    }
+
+    .exif-section-title {
+        font-size: 0.65rem;
+    }
+
+    .exif-item {
+        font-size: 0.78rem;
+        padding: 4px 0;
+    }
+
+    .viewer-filmstrip {
+        height: 64px;
+        padding: 6px 8px;
+    }
+
+    .filmstrip-item {
+        width: 52px;
+        height: 52px;
     }
 
     .exif-value.exif-path {

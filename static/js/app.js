@@ -2448,6 +2448,15 @@ document.querySelector('.viewer-delete-btn').addEventListener('click', deleteCur
 document.querySelector('.viewer-prev').addEventListener('click', showPrev);
 document.querySelector('.viewer-next').addEventListener('click', showNext);
 
+// 移动端信息面板切换
+const viewerInfoToggle = document.querySelector('.viewer-info-toggle');
+if (viewerInfoToggle) {
+    viewerInfoToggle.addEventListener('click', () => {
+        const sidebar = document.getElementById('viewer-sidebar');
+        if (sidebar) sidebar.classList.toggle('mobile-open');
+    });
+}
+
 // 缩略图条滚轮横向滚动
 document.querySelector('.viewer-filmstrip').addEventListener('wheel', (e) => {
     if (e.deltaY !== 0) {
@@ -2486,31 +2495,158 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
-// 触摸滑动
-let touchStartX = 0;
-let touchEndX = 0;
+// ========== 灯箱 Pinch-to-Zoom ==========
+let pinchState = {
+    scale: 1,
+    panX: 0,
+    panY: 0,
+    initialDistance: 0,
+    initialScale: 1,
+    isPinching: false,
+    isPanning: false,
+    startPanX: 0,
+    startPanY: 0,
+    touchStartX: 0,
+    touchStartY: 0,
+};
 
-document.getElementById('viewer').addEventListener('touchstart', (e) => {
-    touchStartX = e.changedTouches[0].screenX;
-}, { passive: true });
+function getDistance(touches) {
+    const dx = touches[0].screenX - touches[1].screenX;
+    const dy = touches[0].screenY - touches[1].screenY;
+    return Math.sqrt(dx * dx + dy * dy);
+}
 
-document.getElementById('viewer').addEventListener('touchend', (e) => {
-    touchEndX = e.changedTouches[0].screenX;
-    handleSwipe();
-}, { passive: true });
+function getCenter(touches) {
+    return {
+        x: (touches[0].screenX + touches[1].screenX) / 2,
+        y: (touches[0].screenY + touches[1].screenY) / 2,
+    };
+}
 
-function handleSwipe() {
-    const swipeThreshold = 50;
-    const diff = touchStartX - touchEndX;
+function applyTransform(img) {
+    if (!img) return;
+    img.style.transform = `translate(${pinchState.panX}px, ${pinchState.panY}px) scale(${pinchState.scale})`;
+}
 
-    if (Math.abs(diff) > swipeThreshold) {
-        if (diff > 0) {
-            showNext();
-        } else {
-            showPrev();
-        }
+function resetZoom(img) {
+    pinchState.scale = 1;
+    pinchState.panX = 0;
+    pinchState.panY = 0;
+    if (img) {
+        img.style.transition = 'transform 0.25s ease';
+        applyTransform(img);
+        setTimeout(() => { if (img) img.style.transition = ''; }, 250);
     }
 }
+
+const viewerEl = document.getElementById('viewer');
+
+viewerEl.addEventListener('touchstart', (e) => {
+    const img = document.querySelector('#viewer-media-container img');
+    if (!img) return;
+
+    if (e.touches.length === 2) {
+        // 双指开始缩放
+        e.preventDefault();
+        pinchState.isPinching = true;
+        pinchState.initialDistance = getDistance(e.touches);
+        pinchState.initialScale = pinchState.scale;
+        img.style.transition = '';
+    } else if (e.touches.length === 1 && pinchState.scale > 1.05) {
+        // 单指开始平移（已缩放状态）
+        pinchState.isPanning = true;
+        pinchState.startPanX = pinchState.panX;
+        pinchState.startPanY = pinchState.panY;
+        pinchState.touchStartX = e.touches[0].screenX;
+        pinchState.touchStartY = e.touches[0].screenY;
+        img.style.transition = '';
+    } else if (e.touches.length === 1) {
+        // 单指记录滑动起点
+        pinchState.touchStartX = e.touches[0].screenX;
+    }
+}, { passive: false });
+
+viewerEl.addEventListener('touchmove', (e) => {
+    const img = document.querySelector('#viewer-media-container img');
+    if (!img) return;
+
+    if (e.touches.length === 2 && pinchState.isPinching) {
+        e.preventDefault();
+        const distance = getDistance(e.touches);
+        const ratio = distance / pinchState.initialDistance;
+        let newScale = pinchState.initialScale * ratio;
+        newScale = Math.max(1, Math.min(newScale, 5));
+        pinchState.scale = newScale;
+        applyTransform(img);
+    } else if (e.touches.length === 1 && pinchState.isPanning && pinchState.scale > 1.05) {
+        e.preventDefault();
+        const dx = e.touches[0].screenX - pinchState.touchStartX;
+        const dy = e.touches[0].screenY - pinchState.touchStartY;
+        pinchState.panX = pinchState.startPanX + dx;
+        pinchState.panY = pinchState.startPanY + dy;
+        applyTransform(img);
+    }
+}, { passive: false });
+
+viewerEl.addEventListener('touchend', (e) => {
+    const img = document.querySelector('#viewer-media-container img');
+    if (!img) return;
+
+    if (pinchState.isPinching && e.touches.length < 2) {
+        pinchState.isPinching = false;
+        if (pinchState.scale < 1.05) {
+            resetZoom(img);
+        }
+    }
+    if (pinchState.isPanning && e.touches.length === 0) {
+        pinchState.isPanning = false;
+        if (pinchState.scale < 1.05) {
+            resetZoom(img);
+        }
+    }
+    // 单指滑动切换（仅在未缩放时）
+    if (e.changedTouches.length === 1 && pinchState.scale <= 1.05 && !pinchState.isPinching) {
+        const touchEndX = e.changedTouches[0].screenX;
+        const diff = pinchState.touchStartX - touchEndX;
+        const swipeThreshold = 50;
+        if (Math.abs(diff) > swipeThreshold) {
+            if (diff > 0) showNext();
+            else showPrev();
+        }
+    }
+});
+
+// 双击放大/还原
+viewerEl.addEventListener('dblclick', (e) => {
+    const img = document.querySelector('#viewer-media-container img');
+    if (!img) return;
+    if (pinchState.scale > 1.05) {
+        resetZoom(img);
+    } else {
+        pinchState.scale = 2.5;
+        pinchState.panX = 0;
+        pinchState.panY = 0;
+        img.style.transition = 'transform 0.25s ease';
+        applyTransform(img);
+        setTimeout(() => { if (img) img.style.transition = ''; }, 250);
+    }
+});
+
+// 切换照片时重置缩放
+const originalOpenLightbox = openLightbox;
+openLightbox = function(photoId) {
+    pinchState.scale = 1;
+    pinchState.panX = 0;
+    pinchState.panY = 0;
+    pinchState.isPinching = false;
+    pinchState.isPanning = false;
+    originalOpenLightbox(photoId);
+    const img = document.querySelector('#viewer-media-container img');
+    if (img) {
+        img.style.transform = '';
+        img.style.transition = '';
+    }
+};
 
 // 拖选框选
 let isDragging = false;

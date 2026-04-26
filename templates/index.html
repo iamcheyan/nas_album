@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>NAS Album</title>
     <link rel="stylesheet" href="/static/css/style.css">
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -218,6 +218,10 @@
             <button class="viewer-nav viewer-next" data-i18n-title="action.next" title="下一张 (→)">
                 <svg width="24" height="24"><use href="#icon-chevron-right"/></svg>
             </button>
+            <!-- 移动端信息面板切换按钮 -->
+            <button class="viewer-info-toggle" data-i18n-title="action.info" title="详细信息">
+                <svg width="20" height="20"><use href="#icon-info"/></svg>
+            </button>
             <div class="viewer-media-wrap">
                 <div id="viewer-media-container"></div>
             </div>
@@ -227,7 +231,7 @@
         </div>
 
         <!-- 右侧信息面板 -->
-        <div class="viewer-sidebar">
+        <div class="viewer-sidebar" id="viewer-sidebar">
             <div class="viewer-sidebar-header">
                 <span><svg width="16" height="16" style="vertical-align:-2px;margin-right:4px"><use href="#icon-info"/></svg><span data-i18n="exif.details">详细信息</span></span>
                 <div style="display:flex;gap:8px">
