@@ -3,8 +3,7 @@ import os
 # 照片库路径配置
 # 支持多个路径，按顺序扫描
 PHOTO_LIBRARY_PATHS = [
-    "/Users/tetsuya/Development/nas_album/Photos Library.photoslibrary/originals/",
-    "/Volumes/DATA-2T/Pictures",
+    "/data/Pictures/",
 ]
 
 # 服务器配置

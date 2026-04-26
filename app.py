@@ -550,35 +550,103 @@ SCREEN_RESOLUTIONS = {
 }
 
 
+# 截图文件名前缀/关键词
+SCREENSHOT_NAME_PATTERNS = [
+    r'^screenshot[_-]?',
+    r'^Screenshot[_-]?',
+    r'^SCREENSHOT[_-]?',
+    r'^微信图片[_-]?',
+    r'^微信圖片[_-]?',
+    r'^WeChat\s+圖片[_-]?',
+    r'^微博图片[_-]?',
+    r'^微博圖片[_-]?',
+    r'^QQ图片[_-]?',
+    r'^QQ圖片[_-]?',
+    r'^截屏[_-]?',
+    r'^截圖[_-]?',
+]
+
+# 截图常见目录关键词
+SCREENSHOT_PATH_PATTERNS = [
+    r'[/\\]Screenshots[/\\]',
+    r'[/\\]screenshots[/\\]',
+    r'[/\\]截图[/\\]',
+    r'[/\\]截圖[/\\]',
+    r'[/\\]Screen Shot[/\\]',
+    r'[/\\]ScreenShot[/\\]',
+    r'[/\\]微信[/\\]',
+    r'[/\\]WeiXin[/\\]',
+    r'[/\\]微博[/\\]',
+    r'[/\\]Weibo[/\\]',
+    r'[/\\]QQ[/\\]',
+    r'[/\\]Telegram[/\\]',
+    r'[/\\]钉钉[/\\]',
+    r'[/\\]DingTalk[/\\]',
+    r'[/\\]飞书[/\\]',
+    r'[/\\]Lark[/\\]',
+]
+
+
 def detect_screenshot(path, ext, width=None, height=None, exif=None):
     """检测是否为截图
     
-    规则：
-    1. PNG + 屏幕分辨率 = 截图
-    2. HEIC = 照片（iPhone相机默认格式）
-    3. JPEG: 有相机EXIF(Make/Model) = 照片，无 = 未知（不标记）
+    规则（按优先级）：
+    1. 文件名匹配截图前缀 → 截图
+    2. 路径包含截图/聊天软件目录 → 截图
+    3. PNG + 屏幕分辨率 → 截图
+    4. PNG + 无相机EXIF → 截图（绝大多数PNG无EXIF都是截图/保存图）
+    5. HEIC → 照片（iPhone相机默认格式）
+    6. JPEG + 有相机EXIF → 照片
+    7. JPEG + 无相机EXIF + 屏幕分辨率 → 截图
+    8. 其他 → 不是截图
     """
+    import re
+    filename = Path(path).name
+    path_str = str(path)
     ext_lower = ext.lower()
+    
+    # 1. 文件名匹配截图前缀
+    for pattern in SCREENSHOT_NAME_PATTERNS:
+        if re.search(pattern, filename, re.IGNORECASE):
+            return True
+    
+    # 2. 路径匹配截图/聊天软件目录
+    for pattern in SCREENSHOT_PATH_PATTERNS:
+        if re.search(pattern, path_str, re.IGNORECASE):
+            return True
     
     # HEIC 默认是照片
     if ext_lower == '.heic':
         return False
     
-    # PNG + 屏幕分辨率 = 截图
+    # 检查是否有相机EXIF
+    has_camera_exif = False
+    if exif:
+        make = exif.get('Make')
+        model = exif.get('Model')
+        if make or model:
+            has_camera_exif = True
+    
+    # 3. PNG 判断
     if ext_lower == '.png':
         if width and height:
+            # PNG + 屏幕分辨率 = 截图
             if (width, height) in SCREEN_RESOLUTIONS or (height, width) in SCREEN_RESOLUTIONS:
                 return True
+        # PNG + 无相机EXIF = 截图（绝大多数PNG无EXIF都是截图或保存图）
+        if not has_camera_exif:
+            return True
         return False
     
-    # JPEG: 检查EXIF是否有相机信息
+    # 4. JPEG 判断
     if ext_lower in ('.jpg', '.jpeg'):
-        if exif:
-            make = exif.get('Make')
-            model = exif.get('Model')
-            if make or model:
-                return False  # 有相机信息 = 照片
-        # 无相机信息，可能是截图、下载图片等，暂不标记
+        if has_camera_exif:
+            return False  # 有相机信息 = 照片
+        # 无相机信息，检查分辨率
+        if width and height:
+            if (width, height) in SCREEN_RESOLUTIONS or (height, width) in SCREEN_RESOLUTIONS:
+                return True  # 无EXIF + 屏幕分辨率 = 截图
+        # 无相机信息也不匹配屏幕分辨率，保守判断为不是截图
         return False
     
     return False
@@ -643,6 +711,9 @@ def scan_photos_fast():
                 continue
             print(f"扫描路径: {lib_path}")
             for root, dirs, files in os.walk(lib_path):
+                # 跳过 FreeFileSync 临时同步文件夹
+                if '.filetransfer' in root.split(os.sep):
+                    continue
                 for filename in files:
                     ext = Path(filename).suffix.lower()
                     if ext in ALL_EXTENSIONS:
@@ -982,6 +1053,10 @@ def get_photos():
     conn = get_db()
     
     show_hidden = request.args.get('hidden', '0', type=str) == '1'
+    media_type = request.args.get('media_type', '', type=str)
+    favorite = request.args.get('favorite', '', type=str)
+    recent = request.args.get('recent', '', type=str)
+    filter_type = request.args.get('filter_type', 'all', type=str)
     
     where_clause = 'WHERE 1=1'
     params = []
@@ -1001,11 +1076,22 @@ def get_photos():
         where_clause += " AND strftime('%d', date_taken) = ?"
         day_str = day.zfill(2)
         params.append(day_str)
+    if media_type:
+        where_clause += ' AND media_type = ?'
+        params.append(media_type)
+    if favorite == '1':
+        where_clause += ' AND favorite = 1'
+    if recent == '1':
+        where_clause += " AND date_taken >= datetime('now', '-30 days')"
+    if filter_type == 'photo':
+        where_clause += ' AND (is_screenshot IS NULL OR is_screenshot = 0)'
+    elif filter_type == 'screenshot':
+        where_clause += ' AND is_screenshot = 1'
     
     total = conn.execute(f'SELECT COUNT(*) FROM photos {where_clause}', params).fetchone()[0]
     
     query = f'''
-        SELECT id, path, filename, media_type, source_path, date_taken, width, height, thumbnail_path, file_size, duration, favorite, latitude, longitude, hidden
+        SELECT id, path, filename, media_type, source_path, date_taken, width, height, thumbnail_path, file_size, duration, favorite, latitude, longitude, hidden, is_screenshot
         FROM photos 
         {where_clause}
         ORDER BY date_taken DESC
@@ -1538,6 +1624,22 @@ def delete_photo(photo_id):
         conn.close()
 
 
+@app.route('/api/photo/<int:photo_id>/favorite', methods=['POST'])
+def toggle_favorite_photo(photo_id):
+    """Toggle favorite status of a photo"""
+    conn = get_db()
+    photo = conn.execute('SELECT favorite FROM photos WHERE id = ?', (photo_id,)).fetchone()
+    if not photo:
+        conn.close()
+        return jsonify({'error': 'Photo not found'}), 404
+    
+    new_favorite = 0 if photo['favorite'] else 1
+    conn.execute('UPDATE photos SET favorite = ? WHERE id = ?', (new_favorite, photo_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True, 'favorite': bool(new_favorite)})
+
+
 @app.route('/api/photo/<int:photo_id>/hide', methods=['POST'])
 def hide_photo(photo_id):
     """Toggle hidden status of a photo"""
@@ -1566,6 +1668,77 @@ def get_hidden_photos():
     ''').fetchall()
     conn.close()
     return jsonify({'photos': [photo_row_to_dict(p) for p in photos]})
+
+
+@app.route('/api/duplicates')
+def get_duplicates():
+    """Return duplicate photo groups (same filename + file_size)"""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    per_page = min(per_page, 100)
+    offset = (page - 1) * per_page
+    
+    conn = get_db()
+    # Find groups with same filename and file_size, count > 1
+    rows = conn.execute('''
+        SELECT filename, file_size, COUNT(*) as cnt
+        FROM photos
+        WHERE hidden = 0
+        GROUP BY filename, file_size
+        HAVING cnt > 1
+        ORDER BY cnt DESC
+        LIMIT ? OFFSET ?
+    ''', (per_page, offset)).fetchall()
+    
+    # Get total count
+    total_row = conn.execute('''
+        SELECT COUNT(*) FROM (
+            SELECT filename, file_size
+            FROM photos
+            WHERE hidden = 0
+            GROUP BY filename, file_size
+            HAVING COUNT(*) > 1
+        )
+    ''').fetchone()
+    total_groups = total_row[0] if total_row else 0
+    
+    groups = []
+    for row in rows:
+        filename = row['filename']
+        file_size = row['file_size']
+        photos = conn.execute('''
+            SELECT id, path, filename, media_type, source_path, thumbnail_path, file_size
+            FROM photos
+            WHERE filename = ? AND file_size = ? AND hidden = 0
+            ORDER BY path ASC
+        ''', (filename, file_size)).fetchall()
+        
+        photo_list = []
+        for p in photos:
+            photo_list.append({
+                'id': p['id'],
+                'path': p['path'],
+                'filename': p['filename'],
+                'media_type': p['media_type'],
+                'source_path': p['source_path'],
+                'thumbnail_url': f'/thumbnail/{p["id"]}',
+                'file_size': p['file_size']
+            })
+        groups.append({
+            'filename': filename,
+            'file_size': file_size,
+            'count': len(photo_list),
+            'photos': photo_list
+        })
+    
+    conn.close()
+    return jsonify({
+        'groups': groups,
+        'total_groups': total_groups,
+        'page': page,
+        'per_page': per_page,
+        'has_more': offset + len(groups) < total_groups
+    })
 
 
 @app.route('/api/photos/batch_delete', methods=['POST'])
@@ -1619,46 +1792,157 @@ def batch_delete_photos():
 
 @app.route('/api/duplicates')
 def find_duplicates():
+    """按 filename + file_size 分组查找重复照片（轻量级方案）"""
     conn = get_db()
-    photos = conn.execute('SELECT id, path, filename, file_size FROM photos WHERE media_type = "image"').fetchall()
+    # 获取所有非隐藏照片（包括视频）
+    photos = conn.execute('''
+        SELECT id, path, filename, file_size, media_type, date_taken, width, height, thumbnail_path, duration
+        FROM photos
+        WHERE hidden = 0
+    ''').fetchall()
     conn.close()
     
-    size_groups = {}
+    # 按 filename + file_size 分组
+    groups = {}
     for p in photos:
-        size = p['file_size']
-        if size not in size_groups:
-            size_groups[size] = []
-        size_groups[size].append(p)
+        key = (p['filename'], p['file_size'])
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(p)
     
-    duplicates = []
-    for size, group in size_groups.items():
+    # 只保留有重复（>=2个文件）的组
+    duplicate_groups = []
+    for (filename, file_size), group in groups.items():
         if len(group) < 2:
             continue
         
-        hashes = {}
+        # 为每个副本构建信息
+        items = []
         for p in group:
-            img_hash = compute_image_hash(p['path'])
-            if img_hash:
-                if img_hash not in hashes:
-                    hashes[img_hash] = []
-                hashes[img_hash].append(p)
+            item = {
+                'id': p['id'],
+                'filename': p['filename'],
+                'path': p['path'],
+                'file_size': p['file_size'],
+                'media_type': p['media_type'],
+                'thumbnail_url': f'/thumbnail/{p["id"]}',
+                'date_taken': p['date_taken'],
+                'width': p['width'],
+                'height': p['height'],
+            }
+            if p['duration']:
+                item['duration'] = format_duration(p['duration'])
+            items.append(item)
         
-        for img_hash, dup_group in hashes.items():
-            if len(dup_group) >= 2:
-                duplicates.append({
-                    'hash': img_hash,
-                    'photos': [{
-                        'id': p['id'],
-                        'filename': p['filename'],
-                        'path': p['path'],
-                        'thumbnail_url': f'/thumbnail/{p["id"]}'
-                    } for p in dup_group]
-                })
+        # 按路径排序，方便比较
+        items.sort(key=lambda x: x['path'])
+        
+        duplicate_groups.append({
+            'filename': filename,
+            'file_size': file_size,
+            'count': len(items),
+            'items': items
+        })
+    
+    # 按重复数量降序排列
+    duplicate_groups.sort(key=lambda x: x['count'], reverse=True)
     
     return jsonify({
-        'duplicate_groups': duplicates,
-        'total_duplicates': sum(len(g['photos']) for g in duplicates)
+        'groups': duplicate_groups,
+        'total_groups': len(duplicate_groups),
+        'total_duplicates': sum(g['count'] for g in duplicate_groups)
     })
+
+
+# 全局重复照片扫描状态
+dup_scan_status = {
+    'is_scanning': False,
+    'total_files': 0,
+    'duplicate_groups': 0,
+    'duplicate_files': 0,
+    'message': '',
+}
+dup_scan_lock = threading.Lock()
+
+
+@app.route('/api/scan_duplicates', methods=['POST'])
+def scan_duplicates():
+    """手动触发重复照片扫描，返回扫描结果"""
+    global dup_scan_status
+    
+    with dup_scan_lock:
+        if dup_scan_status['is_scanning']:
+            return jsonify({'success': False, 'message': '扫描正在进行中'}), 429
+        dup_scan_status['is_scanning'] = True
+        dup_scan_status['message'] = '扫描中...'
+    
+    def do_scan():
+        global dup_scan_status
+        try:
+            # 1. 先检查并修复文件权限
+            fixed_count = 0
+            for lib_path in PHOTO_LIBRARY_PATHS:
+                if not os.path.exists(lib_path):
+                    continue
+                for root, dirs, files in os.walk(lib_path):
+                    if '.filetransfer' in root.split(os.sep):
+                        continue
+                    for filename in files:
+                        ext = Path(filename).suffix.lower()
+                        if ext in ALL_EXTENSIONS:
+                            full_path = os.path.join(root, filename)
+                            if not os.access(full_path, os.W_OK):
+                                try:
+                                    os.chmod(full_path, 0o644)
+                                    fixed_count += 1
+                                except Exception:
+                                    pass
+            
+            # 2. 扫描重复照片
+            conn = get_db()
+            total = conn.execute('SELECT COUNT(*) FROM photos WHERE hidden = 0').fetchone()[0]
+            
+            rows = conn.execute('''
+                SELECT filename, file_size, COUNT(*) as cnt
+                FROM photos WHERE hidden = 0
+                GROUP BY filename, file_size HAVING cnt > 1
+            ''').fetchall()
+            
+            groups = len(rows)
+            duplicates = sum(r['cnt'] for r in rows)
+            conn.close()
+            
+            with dup_scan_lock:
+                dup_scan_status['total_files'] = total
+                dup_scan_status['duplicate_groups'] = groups
+                dup_scan_status['duplicate_files'] = duplicates
+                if fixed_count > 0:
+                    dup_scan_status['message'] = f'扫描完成：修复 {fixed_count} 个文件权限，发现 {groups} 组重复，共 {duplicates} 个文件'
+                else:
+                    dup_scan_status['message'] = f'扫描完成：发现 {groups} 组重复，共 {duplicates} 个文件'
+                dup_scan_status['is_scanning'] = False
+        except Exception as e:
+            with dup_scan_lock:
+                dup_scan_status['message'] = f'扫描出错: {str(e)}'
+                dup_scan_status['is_scanning'] = False
+    
+    thread = threading.Thread(target=do_scan)
+    thread.start()
+    
+    return jsonify({'success': True, 'message': '扫描已启动'})
+
+
+@app.route('/api/scan_duplicates/status')
+def scan_duplicates_status():
+    """获取重复照片扫描状态"""
+    with dup_scan_lock:
+        return jsonify({
+            'is_scanning': dup_scan_status['is_scanning'],
+            'total_files': dup_scan_status['total_files'],
+            'duplicate_groups': dup_scan_status['duplicate_groups'],
+            'duplicate_files': dup_scan_status['duplicate_files'],
+            'message': dup_scan_status['message'],
+        })
 
 
 @app.route('/api/trash')
@@ -1750,6 +2034,19 @@ def get_stats():
     newest = conn.execute('SELECT date_taken FROM photos WHERE hidden = 0 ORDER BY date_taken DESC LIMIT 1').fetchone()
     
     db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+    
+    # Count duplicate groups
+    dup_rows = conn.execute('''
+        SELECT COUNT(*) FROM (
+            SELECT filename, file_size
+            FROM photos
+            WHERE hidden = 0
+            GROUP BY filename, file_size
+            HAVING COUNT(*) > 1
+        )
+    ''').fetchone()
+    duplicates = dup_rows[0] if dup_rows else 0
+    
     conn.close()
     
     return jsonify({
@@ -1759,6 +2056,7 @@ def get_stats():
         'favorites': favorites,
         'trash': trash,
         'hidden': hidden,
+        'duplicates': duplicates,
         'sources': sources,
         'oldest': oldest['date_taken'] if oldest else None,
         'newest': newest['date_taken'] if newest else None,
@@ -1811,14 +2109,24 @@ def get_albums():
 
 @app.route('/api/albums/<int:album_id>/photos')
 def get_album_photos(album_id):
+    filter_type = request.args.get('filter_type', 'all', type=str)
     conn = get_db()
-    photos = conn.execute('''
-        SELECT p.id, p.path, p.filename, p.media_type, p.date_taken, p.width, p.height, p.thumbnail_path, p.file_size, p.duration, p.favorite, p.hidden
+    
+    where_clause = 'ap.album_id = ? AND p.hidden = 0'
+    params = [album_id]
+    
+    if filter_type == 'photo':
+        where_clause += ' AND (p.is_screenshot IS NULL OR p.is_screenshot = 0)'
+    elif filter_type == 'screenshot':
+        where_clause += ' AND p.is_screenshot = 1'
+    
+    photos = conn.execute(f'''
+        SELECT p.id, p.path, p.filename, p.media_type, p.date_taken, p.width, p.height, p.thumbnail_path, p.file_size, p.duration, p.favorite, p.hidden, p.is_screenshot
         FROM photos p
         JOIN album_photos ap ON p.id = ap.photo_id
-        WHERE ap.album_id = ? AND p.hidden = 0
+        WHERE {where_clause}
         ORDER BY p.date_taken DESC
-    ''', (album_id,)).fetchall()
+    ''', params).fetchall()
     conn.close()
     
     return jsonify({
@@ -2046,6 +2354,43 @@ def kill_port_process(port):
         print(f'清理端口失败: {e}')
 
 
+@app.route('/api/check_permissions')
+def check_permissions():
+    """检查照片库文件的读写权限（采样检查，避免遍历全部文件）"""
+    import getpass
+    
+    total = 0
+    writable = 0
+    sample_paths = []
+    MAX_SAMPLE = 100  # 最多检查 100 个文件
+    
+    for lib_path in PHOTO_LIBRARY_PATHS:
+        if not os.path.exists(lib_path):
+            continue
+        for root, dirs, files in os.walk(lib_path):
+            if '.filetransfer' in root.split(os.sep):
+                continue
+            for filename in files:
+                ext = Path(filename).suffix.lower()
+                if ext in ALL_EXTENSIONS:
+                    full_path = os.path.join(root, filename)
+                    total += 1
+                    if total <= MAX_SAMPLE:
+                        if os.access(full_path, os.W_OK):
+                            writable += 1
+                        else:
+                            sample_paths.append(full_path)
+    
+    return jsonify({
+        'total_count': total,
+        'writable_count': writable,
+        'sample_count': min(total, MAX_SAMPLE),
+        'sample_paths': sample_paths[:5],
+        'user': getpass.getuser(),
+        'library_path': PHOTO_LIBRARY_PATHS[0] if PHOTO_LIBRARY_PATHS else ''
+    })
+
+
 if __name__ == '__main__':
     init_db()
     clean_expired_trash()
@@ -2054,4 +2399,4 @@ if __name__ == '__main__':
     scan_thread.start()
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
     kill_port_process(port)
-    app.run(debug=DEBUG, port=port, use_reloader=False)
+    app.run(debug=DEBUG, host='0.0.0.0', port=port, use_reloader=False)

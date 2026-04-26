@@ -1,0 +1,17 @@
+[project]
+name = "nas-album"
+version = "1.0.0"
+description = "一个轻量级的本地照片/视频管理网站"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "flask>=3.0.0",
+    "pillow>=10.0.0",
+    "pillow-heif>=0.15.0",
+]
+
+[project.scripts]
+nas-album = "app:main"
+
+[tool.uv]
+python-preference = "only-managed"

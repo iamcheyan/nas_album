@@ -15,7 +15,7 @@
             font-weight: 300;
         }
         .trash-header p {
-            color: #888;
+            color: var(--text-muted);
             margin-top: 10px;
         }
         .trash-grid {
@@ -27,7 +27,7 @@
             margin: 0 auto;
         }
         .trash-item {
-            background: #1a1a1a;
+            background: var(--bg-secondary);
             border-radius: 10px;
             overflow: hidden;
             position: relative;
@@ -42,16 +42,16 @@
         }
         .trash-item-info .filename {
             font-size: 0.85rem;
-            color: #ccc;
+            color: var(--text-secondary);
             word-break: break-all;
             margin-bottom: 5px;
         }
         .trash-item-info .meta {
             font-size: 0.75rem;
-            color: #666;
+            color: var(--text-muted);
         }
         .trash-item-info .countdown {
-            color: #e74c3c;
+            color: var(--text-secondary);
             font-size: 0.8rem;
             margin-top: 5px;
         }
@@ -70,28 +70,28 @@
             transition: all 0.2s;
         }
         .btn-restore {
-            background: #27ae60;
-            color: #fff;
+            background: var(--bg-hover);
+            color: var(--text-primary);
         }
         .btn-restore:hover {
-            background: #2ecc71;
+            background: var(--text-muted);
         }
         .btn-perm-delete {
-            background: #c0392b;
-            color: #fff;
+            background: var(--bg-hover);
+            color: var(--text-primary);
         }
         .btn-perm-delete:hover {
-            background: #e74c3c;
+            background: var(--text-muted);
         }
         .empty-state {
             text-align: center;
             padding: 60px 20px;
-            color: #555;
+            color: var(--text-muted);
         }
         .back-link {
             display: inline-block;
             margin-top: 20px;
-            color: #3498db;
+            color: var(--text-secondary);
             text-decoration: none;
         }
         @media (max-width: 767px) {
@@ -105,7 +105,7 @@
 </head>
 <body>
     <div class="trash-header">
-        <h1 data-i18n="trash.header">🗑 回收站</h1>
+        <h1 data-i18n="trash.header">回收站</h1>
         <p data-i18n="trash.description">删除的照片会在这里保留 30 天，之后自动永久删除</p>
         <a href="/" class="back-link" data-i18n="trash.backToAlbum">← 返回相册</a>
     </div>

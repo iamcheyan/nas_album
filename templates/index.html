@@ -34,6 +34,8 @@
             <symbol id="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></symbol>
             <symbol id="icon-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></symbol>
             <symbol id="icon-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></symbol>
+            <symbol id="icon-github" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></symbol>
+            <symbol id="icon-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></symbol>
         </defs>
     </svg>
 
@@ -91,6 +93,11 @@
                             <span class="sidebar-label" data-i18n="nav.hidden">隐藏照片</span>
                             <span class="sidebar-count" id="count-hidden"></span>
                         </li>
+                        <li class="sidebar-item" data-view="duplicates">
+                            <svg class="sidebar-icon" width="18" height="18"><use href="#icon-alert"/></svg>
+                            <span class="sidebar-label" data-i18n="nav.duplicates">重复照片</span>
+                            <span class="sidebar-count" id="count-duplicates"></span>
+                        </li>
                     </ul>
                 </div>
 
@@ -140,6 +147,9 @@
                         <svg class="search-icon" width="16" height="16"><use href="#icon-search"/></svg>
                         <input type="text" id="search-input" data-i18n-placeholder="action.search" placeholder="搜索照片...">
                     </div>
+                    <a href="https://github.com/iamcheyan/nas_album" target="_blank" rel="noopener noreferrer" class="icon-btn" title="GitHub">
+                        <svg width="18" height="18"><use href="#icon-github"/></svg>
+                    </a>
                     <button id="settings-btn" class="icon-btn" data-i18n-title="action.settings" title="设置">
                         <svg width="18" height="18"><use href="#icon-settings"/></svg>
                     </button>
@@ -155,11 +165,22 @@
                 </div>
             </div>
 
+            <!-- 重复照片操作栏 -->
+            <div id="duplicates-bar" class="duplicates-bar hidden">
+                <span id="duplicates-count">已标记 0 个文件待删除</span>
+                <button id="duplicates-delete-btn" class="btn btn-danger" data-i18n="duplicates.deleteMarked">删除标记项</button>
+            </div>
+
             <!-- 视图标题栏 -->
             <div class="view-header">
                 <h1 id="view-title" data-i18n="title.allPhotos">全部照片</h1>
                 <div class="view-actions">
                     <button id="select-mode-btn" class="btn btn-secondary" data-i18n="action.select">选择</button>
+                    <select id="photo-filter-type" class="photo-filter-select">
+                        <option value="all" data-i18n="filter.all">全部</option>
+                        <option value="photo" data-i18n="filter.photo">照片</option>
+                        <option value="screenshot" data-i18n="filter.screenshot">截图</option>
+                    </select>
                     <!-- 缩略图尺寸调节 -->
                     <div class="thumb-size-control">
                         <svg class="thumb-size-icon" width="14" height="14"><use href="#icon-search"/></svg>
@@ -210,7 +231,7 @@
             <div class="viewer-sidebar-header">
                 <span><svg width="16" height="16" style="vertical-align:-2px;margin-right:4px"><use href="#icon-info"/></svg><span data-i18n="exif.details">详细信息</span></span>
                 <div style="display:flex;gap:8px">
-                    <button class="viewer-delete-btn icon-btn" data-i18n-title="action.delete" title="删除 (Delete)" style="color:#ff6b6b">
+                    <button class="viewer-delete-btn icon-btn" data-i18n-title="action.delete" title="删除 (Delete)">
                         <svg width="18" height="18"><use href="#icon-trash"/></svg>
                     </button>
                     <button class="viewer-sidebar-toggle" data-i18n-title="action.collapse" title="收起面板">
@@ -240,7 +261,7 @@
             <p class="dialog-message" id="dialog-message"></p>
             <div class="dialog-actions" id="dialog-actions">
                 <button class="btn btn-secondary" id="dialog-cancel" data-i18n="action.cancel">取消</button>
-                <button class="btn btn-danger" id="dialog-confirm" data-i18n="action.confirm">确定</button>
+                <button class="btn btn-primary" id="dialog-confirm" data-i18n="action.confirm">确定</button>
             </div>
         </div>
     </div>
@@ -311,6 +332,22 @@
                         </div>
                         <div class="progress-text" id="backfill-gps-text">0 / 0</div>
                     </div>
+                    <div class="settings-item">
+                        <div class="settings-item-info">
+                            <div class="settings-item-title" data-i18n="settings.scanDuplicates">扫描重复照片</div>
+                            <div class="settings-item-desc" data-i18n="settings.scanDuplicatesDesc">扫描照片库中的重复文件，结果可在重复照片页面查看</div>
+                        </div>
+                        <button id="scan-duplicates-btn" class="btn btn-primary" data-i18n="settings.startScan">开始扫描</button>
+                    </div>
+                    <div id="scan-duplicates-result" class="permission-result hidden"></div>
+                    <div class="settings-item">
+                        <div class="settings-item-info">
+                            <div class="settings-item-title" data-i18n="settings.permissionCheck">文件权限检查</div>
+                            <div class="settings-item-desc" data-i18n="settings.permissionCheckDesc">检查照片目录的读写权限，删除功能需要写权限</div>
+                        </div>
+                        <button id="check-permission-btn" class="btn btn-primary" data-i18n="settings.checkPermission">检查权限</button>
+                    </div>
+                    <div id="permission-result" class="permission-result hidden"></div>
                 </div>
             </div>
         </div>

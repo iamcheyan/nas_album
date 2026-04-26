@@ -17,6 +17,7 @@ let searchQuery = '';
 let currentSourcePath = '';
 let currentAlbumId = null;
 let allAlbums = [];
+let photoFilterType = 'all';  // 'all' | 'photo' | 'screenshot'
 
 const PER_PAGE = 50;
 const SESSION_KEY = 'nas-album-session';
@@ -154,7 +155,8 @@ function switchView(view) {
         favorites: t('title.favorites'),
         recent: t('title.recent'),
         trash: t('title.trash'),
-        hidden: t('title.hiddenPhotos')
+        hidden: t('title.hiddenPhotos'),
+        duplicates: t('title.duplicates')
     };
     document.getElementById('view-title').textContent = titles[view] || t('title.allPhotos');
 
@@ -166,6 +168,11 @@ function switchView(view) {
         loadTrash();
     } else if (view === 'hidden') {
         loadHiddenPhotos();
+    } else if (view === 'duplicates') {
+        loadDuplicates();
+    } else if (view === 'photos' || view === 'videos' || view === 'favorites' || view === 'recent') {
+        // 过滤视图：先加载全部数据，然后过滤渲染
+        loadFilteredPhotos(view);
     } else {
         loadPhotos();
     }
@@ -507,9 +514,27 @@ function createPhotoElement(photo) {
         div.appendChild(playBtn);
     }
 
+    // Action buttons container
+    const actionsContainer = document.createElement('div');
+    actionsContainer.className = 'photo-actions';
+
+    // Favorite button
+    const favBtn = document.createElement('button');
+    favBtn.className = 'photo-action-btn photo-fav-btn';
+    if (photo.favorite) favBtn.classList.add('favorited');
+    favBtn.innerHTML = photo.favorite
+        ? '<svg width="14" height="14" fill="currentColor"><use href="#icon-star"/></svg>'
+        : '<svg width="14" height="14"><use href="#icon-star"/></svg>';
+    favBtn.title = photo.favorite ? t('action.unfavorite') : t('action.favorite');
+    favBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleFavoritePhoto(photo.id, photo.favorite);
+    });
+    actionsContainer.appendChild(favBtn);
+
     // Hide/Unhide button
     const hideBtn = document.createElement('button');
-    hideBtn.className = 'photo-hide-btn';
+    hideBtn.className = 'photo-action-btn photo-hide-btn';
     hideBtn.innerHTML = photo.hidden
         ? '<svg width="14" height="14"><use href="#icon-eye"/></svg>'
         : '<svg width="14" height="14"><use href="#icon-eye-off"/></svg>';
@@ -518,7 +543,20 @@ function createPhotoElement(photo) {
         e.stopPropagation();
         toggleHidePhoto(photo.id, photo.hidden);
     });
-    div.appendChild(hideBtn);
+    actionsContainer.appendChild(hideBtn);
+
+    // Delete button
+    const delBtn = document.createElement('button');
+    delBtn.className = 'photo-action-btn photo-delete-btn';
+    delBtn.innerHTML = '<svg width="14" height="14"><use href="#icon-trash"/></svg>';
+    delBtn.title = t('action.delete');
+    delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deletePhoto(photo.id, photo.media_type, photo.filename);
+    });
+    actionsContainer.appendChild(delBtn);
+
+    div.appendChild(actionsContainer);
 
     const img = document.createElement('img');
     img.src = photo.thumbnail_url;
@@ -586,16 +624,105 @@ function disableSelectionMode() {
     updateStatus(filteredPhotos.length, 0);
 }
 
-async function toggleHidePhoto(photoId, currentlyHidden) {
-    const action = currentlyHidden ? 'unhide' : 'hide';
+async function toggleFavoritePhoto(photoId, currentlyFavorite) {
+    try {
+        const response = await fetch(`/api/photo/${photoId}/favorite`, { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+            showToast(data.favorite ? t('action.favorite') : t('action.unfavorite'));
+            // Update local data
+            const photo = allPhotos.find(p => p.id === photoId);
+            if (photo) photo.favorite = data.favorite;
+            const fphoto = filteredPhotos.find(p => p.id === photoId);
+            if (fphoto) fphoto.favorite = data.favorite;
+            // Update UI
+            const el = document.querySelector(`.photo-item[data-id="${photoId}"]`);
+            if (el) {
+                const favBtn = el.querySelector('.photo-fav-btn');
+                if (favBtn) {
+                    favBtn.classList.toggle('favorited', data.favorite);
+                    favBtn.innerHTML = data.favorite
+                        ? '<svg width="14" height="14" fill="currentColor"><use href="#icon-star"/></svg>'
+                        : '<svg width="14" height="14"><use href="#icon-star"/></svg>';
+                    favBtn.title = data.favorite ? t('action.unfavorite') : t('action.favorite');
+                }
+            }
+            // If in favorites view and unfavorited, remove from view
+            if (currentView === 'favorites' && !data.favorite) {
+                if (el) {
+                    el.style.transition = 'opacity 0.3s ease';
+                    el.style.opacity = '0';
+                    setTimeout(() => el.remove(), 300);
+                }
+                allPhotos = allPhotos.filter(p => p.id !== photoId);
+                filteredPhotos = filteredPhotos.filter(p => p.id !== photoId);
+                updateStatus(filteredPhotos.length, 0);
+            }
+            loadStats();
+        } else {
+            showToast(t('dialog.favoriteFailed'));
+        }
+    } catch (err) {
+        console.error('Toggle favorite failed:', err);
+        showToast(t('dialog.favoriteFailed'));
+    }
+}
+
+async function deletePhoto(photoId, mediaType, filename) {
+    const typeName = mediaType === 'video' ? t('dialog.video') : t('dialog.photo');
+
     const confirmed = await showDialog({
         type: 'confirm',
-        title: currentlyHidden ? t('action.unhide') : t('action.hide'),
-        message: currentlyHidden ? t('dialog.unhideConfirm') : t('dialog.hideConfirm'),
-        confirmText: t('action.confirm'),
+        icon: '<svg width="32" height="32"><use href="#icon-trash"/></svg>',
+        title: t('dialog.confirmDeleteSingle', typeName),
+        message: t('dialog.confirmDeleteSingleMsg', typeName, filename),
+        confirmText: t('action.delete'),
+        confirmClass: 'btn btn-danger',
         cancelText: t('action.cancel')
     });
+
     if (!confirmed) return;
+
+    try {
+        const response = await fetch(`/api/photo/${photoId}/delete`, {
+            method: 'POST'
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            const el = document.querySelector(`.photo-item[data-id="${photoId}"]`);
+            if (el) {
+                el.style.transition = 'opacity 0.3s ease';
+                el.style.opacity = '0';
+                setTimeout(() => el.remove(), 300);
+            }
+            allPhotos = allPhotos.filter(p => p.id !== photoId);
+            filteredPhotos = filteredPhotos.filter(p => p.id !== photoId);
+            updateStatus(filteredPhotos.length, 0);
+            loadStats();
+            showToast(t('dialog.restored'));
+        } else {
+            showToast(data.error || t('dialog.deleteFailed'));
+        }
+    } catch (err) {
+        console.error(t('dialog.deleteFailed') + ':', err);
+        showToast(t('dialog.deleteFailed') + ': ' + err.message);
+    }
+}
+
+async function toggleHidePhoto(photoId, currentlyHidden) {
+    const action = currentlyHidden ? 'unhide' : 'hide';
+    // 隐藏照片不需要确认，直接执行
+    if (currentlyHidden) {
+        const confirmed = await showDialog({
+            type: 'confirm',
+            title: t('action.unhide'),
+            message: t('dialog.unhideConfirm'),
+            confirmText: t('action.confirm'),
+            cancelText: t('action.cancel')
+        });
+        if (!confirmed) return;
+    }
 
     try {
         const response = await fetch(`/api/photo/${photoId}/hide`, { method: 'POST' });
@@ -683,6 +810,234 @@ async function loadHiddenPhotos() {
         loading.classList.remove('visible');
         isLoading = false;
     }
+}
+
+let duplicatePage = 1;
+let duplicateHasMore = true;
+
+function updateDuplicatesBar() {
+    const bar = document.getElementById('duplicates-bar');
+    if (!bar) return;
+    if (currentView !== 'duplicates') {
+        bar.classList.add('hidden');
+        return;
+    }
+    bar.classList.remove('hidden');
+    const count = getMarkedDuplicateIds().length;
+    const countEl = document.getElementById('duplicates-count');
+    if (countEl) countEl.textContent = t('duplicates.markedCount', count);
+    const btn = document.getElementById('duplicates-delete-btn');
+    if (btn) btn.disabled = count === 0;
+}
+
+function getMarkedDuplicateIds() {
+    const ids = [];
+    document.querySelectorAll('.duplicate-delete-radio:checked').forEach(radio => {
+        ids.push(parseInt(radio.value));
+    });
+    return ids;
+}
+
+async function deleteMarkedDuplicates() {
+    const ids = getMarkedDuplicateIds();
+    if (ids.length === 0) return;
+
+    const confirmed = await showDialog({
+        type: 'confirm',
+        icon: '<svg width="32" height="32"><use href="#icon-trash"/></svg>',
+        title: t('dialog.confirmDeleteTitle'),
+        message: t('dialog.confirmDeleteMsg', ids.length),
+        confirmText: t('action.delete'),
+        confirmClass: 'btn btn-danger',
+        cancelText: t('action.cancel')
+    });
+
+    if (!confirmed) return;
+
+    try {
+        const response = await fetch('/api/photos/batch_delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ photo_ids: ids })
+        });
+
+        const data = await response.json();
+        if (data.success) {
+            const deletedSet = new Set(data.deleted);
+            // Remove deleted items from DOM
+            deletedSet.forEach(id => {
+                const el = document.querySelector(`.duplicate-item[data-id="${id}"]`);
+                if (el) el.remove();
+            });
+            // Remove empty groups
+            document.querySelectorAll('.duplicate-group').forEach(group => {
+                if (group.querySelectorAll('.duplicate-item').length === 0) {
+                    group.remove();
+                }
+            });
+            updateDuplicatesBar();
+            loadStats();
+            if (data.failed && data.failed.length > 0) {
+                showToast(t('dialog.deletePartial', data.deleted_count, data.failed.length));
+            } else {
+                showToast(t('dialog.deleteSuccess', data.deleted_count));
+            }
+        } else {
+            showToast(data.error || t('dialog.batchDeleteFailed'));
+        }
+    } catch (err) {
+        console.error(t('dialog.batchDeleteFailed') + ':', err);
+        showToast(t('dialog.batchDeleteFailed') + ': ' + err.message);
+    }
+}
+
+async function loadDuplicates() {
+    const timeline = document.getElementById('timeline');
+    const loading = document.getElementById('loading');
+    const viewHeader = document.querySelector('.view-header');
+
+    viewHeader.style.display = '';
+    document.getElementById('view-title').textContent = t('title.duplicates');
+
+    if (isLoading || !duplicateHasMore) return;
+    isLoading = true;
+    loading.classList.add('visible');
+
+    try {
+        const response = await fetch(`/api/duplicates?page=${duplicatePage}&per_page=50`);
+        const data = await response.json();
+        const groups = data.groups || [];
+
+        if (groups.length === 0 && duplicatePage === 1) {
+            timeline.innerHTML = `
+                <div class="empty-state">
+                    <div class="placeholder-icon"><svg width="48" height="48"><use href="#icon-check"/></svg></div>
+                    <h2>${t('empty.noDuplicates')}</h2>
+                    <p>${t('empty.noDuplicatesDesc')}</p>
+                </div>
+            `;
+            updateStatus(0, 0);
+            loading.classList.remove('visible');
+            isLoading = false;
+            duplicateHasMore = false;
+            return;
+        }
+
+        if (duplicatePage === 1) {
+            timeline.innerHTML = '';
+        }
+
+        const startIndex = (duplicatePage - 1) * 50;
+        groups.forEach((group, idx) => {
+            const isExpanded = idx < 3; // 默认展开前3组
+            const groupEl = createDuplicateGroupElement(group, startIndex + idx + 1, isExpanded);
+            timeline.appendChild(groupEl);
+        });
+
+        updateStatus(data.total_groups || 0, 0);
+        duplicateHasMore = data.has_more;
+        duplicatePage++;
+    } catch (err) {
+        console.error('Failed to load duplicates:', err);
+    } finally {
+        loading.classList.remove('visible');
+        isLoading = false;
+    }
+}
+
+function createDuplicateGroupElement(group, index, isExpanded = false) {
+    const div = document.createElement('div');
+    div.className = 'duplicate-group';
+    div.dataset.filename = group.filename;
+
+    const sizeStr = formatSize(group.file_size);
+    const header = document.createElement('div');
+    header.className = 'duplicate-group-header';
+    header.innerHTML = `
+        <div class="duplicate-group-info">
+            <span class="duplicate-group-index">#${index}</span>
+            <span class="duplicate-group-filename">${escapeHtml(group.filename)}</span>
+            <span class="duplicate-group-meta">${sizeStr} · ${group.count} ${t('duplicates.copies')}</span>
+        </div>
+        <button class="duplicate-group-toggle" aria-label="toggle">
+            <svg width="16" height="16"><use href="#icon-chevron-${isExpanded ? 'down' : 'right'}"/></svg>
+        </button>
+    `;
+
+    const body = document.createElement('div');
+    body.className = 'duplicate-group-body' + (isExpanded ? ' expanded' : '');
+
+    // Default: keep the first one, mark others for deletion
+    group.photos.forEach((photo, pidx) => {
+        const row = document.createElement('div');
+        row.className = 'duplicate-item';
+        row.dataset.id = photo.id;
+
+        const isKeep = pidx === 0;
+        row.innerHTML = `
+            <div class="duplicate-item-thumb">
+                <img src="${photo.thumbnail_url}" alt="">
+            </div>
+            <div class="duplicate-item-info">
+                <div class="duplicate-item-path">${escapeHtml(photo.path)}</div>
+                <div class="duplicate-item-source">${escapeHtml(photo.source_path || '')}</div>
+            </div>
+            <div class="duplicate-item-actions">
+                <label class="duplicate-radio-label">
+                    <input type="radio" name="keep-${group.filename}" class="duplicate-keep-radio" value="${photo.id}" ${isKeep ? 'checked' : ''}>
+                    <span>${t('duplicates.keep')}</span>
+                </label>
+                <label class="duplicate-radio-label duplicate-delete-label">
+                    <input type="radio" name="keep-${group.filename}" class="duplicate-delete-radio" value="${photo.id}" ${!isKeep ? 'checked' : ''}>
+                    <span>${t('duplicates.delete')}</span>
+                </label>
+            </div>
+        `;
+        body.appendChild(row);
+    });
+
+    // Toggle expand/collapse
+    header.addEventListener('click', (e) => {
+        if (e.target.closest('.duplicate-group-toggle') || e.target.closest('.duplicate-group-header')) {
+            const isExpanded = body.classList.toggle('expanded');
+            const icon = header.querySelector('.duplicate-group-toggle svg use');
+            icon.setAttribute('href', isExpanded ? '#icon-chevron-down' : '#icon-chevron-right');
+        }
+    });
+
+    // Handle radio changes
+    body.addEventListener('change', (e) => {
+        if (e.target.classList.contains('duplicate-keep-radio')) {
+            // When one is marked keep, all others in this group become delete
+            const radios = body.querySelectorAll('.duplicate-keep-radio');
+            radios.forEach(r => {
+                if (r !== e.target) {
+                    const delRadio = r.closest('.duplicate-item').querySelector('.duplicate-delete-radio');
+                    if (delRadio) delRadio.checked = true;
+                }
+            });
+            updateDuplicatesBar();
+        } else if (e.target.classList.contains('duplicate-delete-radio')) {
+            // When one is marked delete, ensure at least one is kept
+            const keepRadios = body.querySelectorAll('.duplicate-keep-radio');
+            const anyChecked = Array.from(keepRadios).some(r => r.checked);
+            if (!anyChecked) {
+                // Re-check the first keep radio
+                if (keepRadios[0]) keepRadios[0].checked = true;
+            }
+            updateDuplicatesBar();
+        }
+    });
+
+    div.appendChild(header);
+    div.appendChild(body);
+    return div;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 function updateSelectionUI() {
@@ -876,6 +1231,12 @@ function getFilteredPhotos() {
         );
     }
 
+    if (photoFilterType === 'photo') {
+        photos = photos.filter(p => !p.is_screenshot);
+    } else if (photoFilterType === 'screenshot') {
+        photos = photos.filter(p => p.is_screenshot);
+    }
+
     return photos;
 }
 
@@ -885,6 +1246,8 @@ function resetPhotos() {
     filteredPhotos = [];
     allPhotos = [];
     currentDayFilter = null;
+    duplicatePage = 1;
+    duplicateHasMore = true;
     document.getElementById('timeline').innerHTML = '';
 }
 
@@ -1061,6 +1424,51 @@ async function selectTimelineDay(year, month, day) {
     saveSession();
 }
 
+async function loadFilteredPhotos(view) {
+    // 过滤视图：用后端 API 分页加载，而不是前端过滤
+    if (isLoading || !hasMore) return;
+
+    isLoading = true;
+    const loadingEl = document.getElementById('loading');
+    loadingEl.classList.add('visible');
+
+    try {
+        let url = `/api/photos?page=${currentPage}&per_page=${PER_PAGE}`;
+        if (view === 'photos') url += '&media_type=image';
+        else if (view === 'videos') url += '&media_type=video';
+        else if (view === 'favorites') url += '&favorite=1';
+        else if (view === 'recent') url += '&recent=1';
+        url += `&filter_type=${photoFilterType}`;
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (currentPage === 1) {
+            allPhotos = data.photos;
+            document.getElementById('timeline').innerHTML = '';
+        } else {
+            allPhotos = allPhotos.concat(data.photos);
+        }
+
+        filteredPhotos = allPhotos;
+        hasMore = data.has_more;
+
+        renderPhotos(data.photos);
+        updateStatus(data.total, selectedPhotos.size);
+
+        if (currentPage === 1) {
+            requestAnimationFrame(() => syncSidebarHighlight(document.getElementById('timeline')));
+        }
+
+        currentPage++;
+    } catch (err) {
+        console.error('加载过滤照片失败:', err);
+    } finally {
+        isLoading = false;
+        loadingEl.classList.remove('visible');
+    }
+}
+
 async function loadPhotos() {
     if (isLoading || !hasMore) return;
     if (currentTab !== 'all' && currentTab !== 'years') return;
@@ -1074,6 +1482,7 @@ async function loadPhotos() {
         if (currentYearFilter) url += `&year=${currentYearFilter}`;
         if (currentMonthFilter) url += `&month=${currentMonthFilter}`;
         if (currentDayFilter) url += `&day=${currentDayFilter}`;
+        url += `&filter_type=${photoFilterType}`;
         const response = await fetch(url);
         const data = await response.json();
 
@@ -1149,14 +1558,21 @@ function setupInfiniteScroll() {
     let scrollSyncRAF = null;
 
     timeline.addEventListener('scroll', () => {
-        if (isLoading || !hasMore) return;
+        if (isLoading) return;
         if (currentTab !== 'all') return;
-        if (currentView === 'trash') return;
 
         const scrollBottom = timeline.scrollTop + timeline.clientHeight;
         const threshold = timeline.scrollHeight - 400;
         if (scrollBottom >= threshold) {
-            loadPhotos();
+            if (currentView === 'duplicates') {
+                if (duplicateHasMore) loadDuplicates();
+            } else if (currentView === 'trash') {
+                return;
+            } else if (currentView === 'photos' || currentView === 'videos' || currentView === 'favorites' || currentView === 'recent') {
+                if (hasMore) loadFilteredPhotos(currentView);
+            } else {
+                if (hasMore) loadPhotos();
+            }
         }
 
         // 滚动同步侧边栏高亮
@@ -1242,7 +1658,7 @@ async function loadPhotoExif(photoId) {
         
         if (gpsLat !== undefined && gpsLat !== null && gpsLon !== undefined && gpsLon !== null) {
             html += '<div class="exif-section exif-gps-section">';
-            html += '<div class="exif-section-title">📍 ' + t('exif.gpsSection') + '</div>';
+            html += '<div class="exif-section-title">' + t('exif.gpsSection') + '</div>';
             html += `<div class="exif-item"><span class="exif-label">${t('exif.latitude')}</span><span class="exif-value">${typeof gpsLat === 'number' ? gpsLat.toFixed(6) : gpsLat}</span></div>`;
             html += `<div class="exif-item"><span class="exif-label">${t('exif.longitude')}</span><span class="exif-value">${typeof gpsLon === 'number' ? gpsLon.toFixed(6) : gpsLon}</span></div>`;
             if (data.gps && data.gps.altitude) {
@@ -1253,7 +1669,7 @@ async function loadPhotoExif(photoId) {
             html += '</div>';
         } else {
             html += '<div class="exif-section exif-gps-section exif-gps-empty">';
-            html += '<div class="exif-section-title">📍 ' + t('exif.gpsSection') + '</div>';
+            html += '<div class="exif-section-title">' + t('exif.gpsSection') + '</div>';
             html += '<div class="exif-item"><span class="exif-value" style="color:var(--text-muted)">' + t('exif.noGps') + '</span></div>';
             html += '</div>';
         }
@@ -1261,17 +1677,17 @@ async function loadPhotoExif(photoId) {
         // ========== 解析拍摄时间（所有日期中取最早/最小的）==========
         if (data.resolved_date && data.all_dates && data.all_dates.length > 0) {
             html += '<div class="exif-section exif-resolved-date">';
-            html += '<div class="exif-section-title">📅 ' + t('exif.resolvedDate') + '</div>';
-            html += `<div class="exif-item exif-highlight"><span class="exif-label">✅ ${t('exif.finalAdopted')}</span><span class="exif-value exif-date-main">${data.resolved_date}</span></div>`;
-            html += `<div class="exif-item"><span class="exif-label">${t('exif.source')}</span><span class="exif-value" style="color:#4CAF50">${data.resolved_source || ''}</span></div>`;
+            html += '<div class="exif-section-title">' + t('exif.resolvedDate') + '</div>';
+            html += `<div class="exif-item exif-highlight"><span class="exif-label">${t('exif.finalAdopted')}</span><span class="exif-value exif-date-main">${data.resolved_date}</span></div>`;
+            html += `<div class="exif-item"><span class="exif-label">${t('exif.source')}</span><span class="exif-value">${data.resolved_source || ''}</span></div>`;
             
             // 展示所有候选日期供对比
             html += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #333;">';
             html += '<div style="font-size:0.7rem;color:#888;margin-bottom:4px">' + t('exif.allDatesCompare') + '</div>';
             data.all_dates.forEach(d => {
                 const isEarliest = d.is_earliest;
-                const style = isEarliest ? 'color:#4CAF50;font-weight:bold' : 'color:#aaa';
-                const icon = isEarliest ? '✅ ' : '   ';
+                const style = isEarliest ? 'font-weight:bold' : '';
+                const icon = isEarliest ? '● ' : '  ';
                 html += `<div style="font-size:0.75rem;padding:2px 0;${style}">${icon}${d.label}: ${d.date}</div>`;
             });
             html += '</div>';
@@ -1306,7 +1722,7 @@ async function loadPhotoExif(photoId) {
                           data.creation_time || data.video_creation_time;
         if (hasAnyDate) {
             html += '<div class="exif-section">';
-            html += '<div class="exif-section-title">📆 ' + t('exif.rawDateSources') + '</div>';
+            html += '<div class="exif-section-title">' + t('exif.rawDateSources') + '</div>';
             if (data.filename_date) {
                 html += `<div class="exif-item"><span class="exif-label">${t('exif.dateSource.filename')}</span><span class="exif-value">${data.filename_date}</span></div>`;
             }
@@ -1695,7 +2111,7 @@ async function loadPhotoExif(photoId) {
         if (data.exif_error) {
             html += '<div class="exif-section">';
             html += '<div class="exif-section-title">' + t('exif.error') + '</div>';
-            html += `<div class="exif-item"><span class="exif-value" style="color:#ff6b6b">${data.exif_error}</span></div>`;
+            html += `<div class="exif-item"><span class="exif-value">${data.exif_error}</span></div>`;
             html += '</div>';
         }
         
@@ -1735,8 +2151,8 @@ function openLightbox(photoId) {
         mediaContainer.appendChild(img);
     }
 
-    // 计数器
-    counter.textContent = `${currentIndex + 1} / ${filteredPhotos.length}`;
+    // 计数器（仅显示当前序号，不显示总数）
+    counter.textContent = `${currentIndex + 1}`;
 
     // 显示查看器
     viewer.classList.remove('hidden');
@@ -1893,6 +2309,8 @@ async function loadStats() {
         document.getElementById('count-trash').textContent = stats.trash || '';
         const hiddenEl = document.getElementById('count-hidden');
         if (hiddenEl) hiddenEl.textContent = stats.hidden || '';
+        const dupEl = document.getElementById('count-duplicates');
+        if (dupEl) dupEl.textContent = stats.duplicates || '';
     } catch (err) {
         console.error(t('empty.noStats') + ':', err);
     }
@@ -1909,7 +2327,7 @@ async function loadSources() {
             li.className = 'sidebar-item';
             li.dataset.source = src.path;
             li.innerHTML = `
-                <span class="sidebar-icon">💾</span>
+                <svg class="sidebar-icon" width="18" height="18"><use href="#icon-folder"/></svg>
                 <span class="sidebar-label" title="${src.path}">${src.name}</span>
                 <span class="sidebar-count">${src.count}</span>
             `;
@@ -1946,7 +2364,7 @@ async function loadPhotosBySource(sourcePath) {
     loadingEl.classList.add('visible');
 
     try {
-        const response = await fetch(`/api/photos?source=${encodeURIComponent(sourcePath)}&page=1&per_page=9999`);
+        const response = await fetch(`/api/photos?source=${encodeURIComponent(sourcePath)}&page=1&per_page=9999&filter_type=${photoFilterType}`);
         const data = await response.json();
         allPhotos = data.photos;
         filteredPhotos = allPhotos;
@@ -2009,7 +2427,7 @@ async function loadPhotosByAlbum(albumId) {
     loadingEl.classList.add('visible');
 
     try {
-        const response = await fetch(`/api/albums/${albumId}/photos`);
+        const response = await fetch(`/api/albums/${albumId}/photos?filter_type=${photoFilterType}`);
         const data = await response.json();
         allPhotos = data.photos;
         filteredPhotos = allPhotos;
@@ -2029,6 +2447,14 @@ document.querySelector('.viewer-close').addEventListener('click', closeLightbox)
 document.querySelector('.viewer-delete-btn').addEventListener('click', deleteCurrentPhoto);
 document.querySelector('.viewer-prev').addEventListener('click', showPrev);
 document.querySelector('.viewer-next').addEventListener('click', showNext);
+
+// 缩略图条滚轮横向滚动
+document.querySelector('.viewer-filmstrip').addEventListener('wheel', (e) => {
+    if (e.deltaY !== 0) {
+        e.preventDefault();
+        e.currentTarget.scrollLeft += e.deltaY;
+    }
+}, { passive: false });
 
 document.getElementById('viewer').addEventListener('click', (e) => {
     if (e.target.id === 'viewer') {
@@ -2156,6 +2582,10 @@ document.addEventListener('mouseup', () => {
 document.getElementById('select-mode-btn').addEventListener('click', enableSelectionMode);
 document.getElementById('cancel-selection-btn').addEventListener('click', disableSelectionMode);
 document.getElementById('batch-delete-btn').addEventListener('click', batchDelete);
+
+// 重复照片删除按钮
+const dupDeleteBtn = document.getElementById('duplicates-delete-btn');
+if (dupDeleteBtn) dupDeleteBtn.addEventListener('click', deleteMarkedDuplicates);
 // ========== 设置面板 ==========
 const settingsPanel = document.getElementById('settings-panel');
 const settingsClose = document.getElementById('settings-close');
@@ -2253,6 +2683,86 @@ document.getElementById('new-album-btn').addEventListener('click', () => {
     showToast(t('dialog.newAlbumWIP'));
 });
 
+// 扫描重复照片
+document.getElementById('scan-duplicates-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('scan-duplicates-btn');
+    const resultEl = document.getElementById('scan-duplicates-result');
+    btn.disabled = true;
+    btn.textContent = t('settings.scanning') || '扫描中...';
+    resultEl.classList.add('hidden');
+
+    try {
+        const res = await fetch('/api/scan_duplicates', { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) {
+            showToast(data.message || t('settings.scanFailed'));
+            btn.disabled = false;
+            btn.textContent = t('settings.startScan') || '开始扫描';
+            return;
+        }
+
+        // 轮询状态
+        const poll = setInterval(async () => {
+            const statusRes = await fetch('/api/scan_duplicates/status');
+            const status = await statusRes.json();
+            if (!status.is_scanning) {
+                clearInterval(poll);
+                btn.disabled = false;
+                btn.textContent = t('settings.startScan') || '开始扫描';
+                const msg = status.message || t('settings.scanComplete');
+                showToast(msg);
+                resultEl.innerHTML = `<div class="permission-ok">${msg}</div>`;
+                resultEl.classList.remove('hidden');
+                // 刷新统计
+                loadStats();
+            }
+        }, 800);
+    } catch (err) {
+        showToast(t('settings.scanFailed') || '扫描失败');
+        btn.disabled = false;
+        btn.textContent = t('settings.startScan') || '开始扫描';
+    }
+});
+
+// 文件权限检查
+document.getElementById('check-permission-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('check-permission-btn');
+    const resultEl = document.getElementById('permission-result');
+    btn.disabled = true;
+    btn.textContent = t('settings.checking') || '检查中...';
+    resultEl.classList.add('hidden');
+
+    try {
+        const res = await fetch('/api/check_permissions');
+        const data = await res.json();
+
+        let html = '';
+        if (data.writable_count === data.total_count) {
+            html = `<div class="permission-ok">${t('settings.permissionOK') || '所有文件权限正常，可以删除照片'}</div>`;
+        } else {
+            html = `<div class="permission-warn">⚠️ ${t('settings.permissionWarning') || '部分文件没有写权限'}</div>`;
+            html += `<div class="permission-detail">${t('settings.writable') || '可写'}: ${data.writable_count} / ${t('settings.total') || '总计'}: ${data.total_count}</div>`;
+            if (data.sample_paths && data.sample_paths.length > 0) {
+                html += '<div class="permission-paths"><div>' + (t('settings.samplePaths') || '示例路径') + ':</div>';
+                data.sample_paths.forEach(p => {
+                    html += `<div class="permission-path">${p}</div>`;
+                });
+                html += '</div>';
+            }
+            html += `<div class="permission-hint">${t('settings.permissionHint') || '运行以下命令修复权限：'}</div>`;
+            html += `<code class="permission-cmd">sudo chown -R ${data.user}:${data.user} ${data.library_path}</code>`;
+        }
+        resultEl.innerHTML = html;
+        resultEl.classList.remove('hidden');
+    } catch (err) {
+        resultEl.innerHTML = `<div class="permission-error">${t('settings.permissionError') || '检查失败'}: ${err.message}</div>`;
+        resultEl.classList.remove('hidden');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = t('settings.checkPermission') || '检查权限';
+    }
+});
+
 function initLanguageSelector() {
     document.querySelectorAll('.lang-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -2338,6 +2848,20 @@ async function init() {
     loadStats();
     loadSources();
     loadAlbums();
+
+    // 照片类型筛选下拉框
+    const photoFilterSelect = document.getElementById('photo-filter-type');
+    if (photoFilterSelect) {
+        photoFilterSelect.addEventListener('change', (e) => {
+            photoFilterType = e.target.value;
+            resetPhotos();
+            if (currentView === 'photos' || currentView === 'videos' || currentView === 'favorites' || currentView === 'recent') {
+                loadFilteredPhotos(currentView);
+            } else {
+                loadPhotos();
+            }
+        });
+    }
 
     // Try to restore session first; if no saved session, load default photos
     const restored = restoreSession();
