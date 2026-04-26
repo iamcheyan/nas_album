@@ -4,17 +4,13 @@
 
 [中文](#功能特性) | [English](#features)
 
-![界面预览](https://github.com/iamcheyan/nas_album/raw/master/screenshot.png)
+![主界面](https://github.com/iamcheyan/nas_album/raw/master/asset/1.jpg)
 
-### 界面截图
+![灯箱浏览](https://github.com/iamcheyan/nas_album/raw/master/asset/2.jpg)
 
-| 主界面 | 灯箱浏览 |
-|:------:|:--------:|
-| ![主界面](https://github.com/iamcheyan/nas_album/raw/master/asset/1.jpg) | ![灯箱浏览](https://github.com/iamcheyan/nas_album/raw/master/asset/2.jpg) |
+![地图模式](https://github.com/iamcheyan/nas_album/raw/master/asset/3.jpg)
 
-| 地图模式 | 重复照片清理 |
-|:--------:|:------------:|
-| ![地图模式](https://github.com/iamcheyan/nas_album/raw/master/asset/3.jpg) | ![重复照片清理](https://github.com/iamcheyan/nas_album/raw/master/asset/4.jpg) |
+![重复照片清理](https://github.com/iamcheyan/nas_album/raw/master/asset/4.jpg)
 
 ---
 
