@@ -1707,10 +1707,10 @@ def get_duplicates():
         filename = row['filename']
         file_size = row['file_size']
         photos = conn.execute('''
-            SELECT id, path, filename, media_type, source_path, thumbnail_path, file_size
+            SELECT id, path, filename, media_type, source_path, thumbnail_path, file_size, width, height
             FROM photos
             WHERE filename = ? AND file_size = ? AND hidden = 0
-            ORDER BY path ASC
+            ORDER BY (width * height) DESC
         ''', (filename, file_size)).fetchall()
         
         photo_list = []
@@ -1722,7 +1722,9 @@ def get_duplicates():
                 'media_type': p['media_type'],
                 'source_path': p['source_path'],
                 'thumbnail_url': f'/thumbnail/{p["id"]}',
-                'file_size': p['file_size']
+                'file_size': p['file_size'],
+                'width': p['width'],
+                'height': p['height']
             })
         groups.append({
             'filename': filename,

@@ -854,8 +854,16 @@ function updateDuplicatesBar() {
 
 function getMarkedDuplicateIds() {
     const ids = [];
-    document.querySelectorAll('.duplicate-delete-radio:checked').forEach(radio => {
-        ids.push(parseInt(radio.value));
+    // For each group, find the checked keep radio, mark all others for deletion
+    document.querySelectorAll('.duplicate-group').forEach(group => {
+        const keepRadio = group.querySelector('.duplicate-keep-radio:checked');
+        const keepId = keepRadio ? parseInt(keepRadio.value) : null;
+        group.querySelectorAll('.duplicate-item').forEach(item => {
+            const itemId = parseInt(item.dataset.id);
+            if (itemId !== keepId) {
+                ids.push(itemId);
+            }
+        });
     });
     return ids;
 }
@@ -989,29 +997,26 @@ function createDuplicateGroupElement(group, index, isExpanded = false) {
     const body = document.createElement('div');
     body.className = 'duplicate-group-body' + (isExpanded ? ' expanded' : '');
 
-    // Default: keep the first one, mark others for deletion
+    // Default: keep the highest resolution one, mark others for deletion
     group.photos.forEach((photo, pidx) => {
         const row = document.createElement('div');
         row.className = 'duplicate-item';
         row.dataset.id = photo.id;
 
-        const isKeep = pidx === 0;
+        const isKeep = pidx === 0; // highest resolution first (sorted by backend)
+        const resolution = (photo.width && photo.height) ? `${photo.width}×${photo.height}` : '';
         row.innerHTML = `
             <div class="duplicate-item-thumb">
                 <img src="${photo.thumbnail_url}" alt="">
             </div>
             <div class="duplicate-item-info">
                 <div class="duplicate-item-path">${escapeHtml(photo.path)}</div>
-                <div class="duplicate-item-source">${escapeHtml(photo.source_path || '')}</div>
+                <div class="duplicate-item-source">${escapeHtml(photo.source_path || '')}${resolution ? ' · ' + resolution : ''}</div>
             </div>
             <div class="duplicate-item-actions">
-                <label class="duplicate-radio-label">
+                <label class="duplicate-radio-label ${isKeep ? 'duplicate-keep-checked' : ''}">
                     <input type="radio" name="keep-${group.filename}" class="duplicate-keep-radio" value="${photo.id}" ${isKeep ? 'checked' : ''}>
                     <span>${t('duplicates.keep')}</span>
-                </label>
-                <label class="duplicate-radio-label duplicate-delete-label">
-                    <input type="radio" name="keep-${group.filename}" class="duplicate-delete-radio" value="${photo.id}" ${!isKeep ? 'checked' : ''}>
-                    <span>${t('duplicates.delete')}</span>
                 </label>
             </div>
         `;
@@ -1027,26 +1032,18 @@ function createDuplicateGroupElement(group, index, isExpanded = false) {
         }
     });
 
-    // Handle radio changes
+    // Handle radio changes - single choice per group
     body.addEventListener('change', (e) => {
         if (e.target.classList.contains('duplicate-keep-radio')) {
-            // When one is marked keep, all others in this group become delete
-            const radios = body.querySelectorAll('.duplicate-keep-radio');
-            radios.forEach(r => {
-                if (r !== e.target) {
-                    const delRadio = r.closest('.duplicate-item').querySelector('.duplicate-delete-radio');
-                    if (delRadio) delRadio.checked = true;
+            // Uncheck all other keep radios in this group, update visual state
+            body.querySelectorAll('.duplicate-keep-radio').forEach(r => {
+                const label = r.closest('.duplicate-radio-label');
+                if (r === e.target) {
+                    label.classList.add('duplicate-keep-checked');
+                } else {
+                    label.classList.remove('duplicate-keep-checked');
                 }
             });
-            updateDuplicatesBar();
-        } else if (e.target.classList.contains('duplicate-delete-radio')) {
-            // When one is marked delete, ensure at least one is kept
-            const keepRadios = body.querySelectorAll('.duplicate-keep-radio');
-            const anyChecked = Array.from(keepRadios).some(r => r.checked);
-            if (!anyChecked) {
-                // Re-check the first keep radio
-                if (keepRadios[0]) keepRadios[0].checked = true;
-            }
             updateDuplicatesBar();
         }
     });

@@ -2476,8 +2476,9 @@ a.exif-value:hover {
     background: var(--bg-active);
 }
 
-.duplicate-delete-label:has(input:checked) {
-    color: #e74c3c;
+.duplicate-radio-label.duplicate-keep-checked {
+    color: var(--accent);
+    background: rgba(52, 152, 219, 0.15);
 }
 
 /* ========== 重复照片操作栏 ========== */
