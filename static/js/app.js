@@ -2899,17 +2899,7 @@ async function pollCleanupStatus() {
                 clearInterval(cleanupPollInterval);
                 cleanupPollInterval = null;
             }
-            // 清理完成，刷新列表
-            const dupCleanupBtn = document.getElementById('duplicates-cleanup-btn');
-            if (dupCleanupBtn) {
-                dupCleanupBtn.disabled = false;
-                dupCleanupBtn.textContent = t('duplicates.oneClickCleanup') || '一键清理';
-            }
-            const dupCleanupActionBtn = document.getElementById('dup-cleanup-action-btn');
-            if (dupCleanupActionBtn) {
-                dupCleanupActionBtn.disabled = false;
-                dupCleanupActionBtn.textContent = t('duplicates.oneClickCleanup') || '一键清理';
-            }
+            _setCleanupButtonsLoading(false);
             showToast(data.message || t('duplicates.cleanupComplete') || '清理完成');
             duplicatePage = 1;
             duplicateHasMore = true;
@@ -2928,32 +2918,56 @@ async function pollCleanupStatus() {
     }
 }
 
+function _setCleanupButtonsLoading(loading) {
+    const dupCleanupBtn = document.getElementById('duplicates-cleanup-btn');
+    const dupCleanupActionBtn = document.getElementById('dup-cleanup-action-btn');
+    const spinner = '<span class="btn-spinner"></span>';
+    const text = t('duplicates.cleaning') || '清理中...';
+    [dupCleanupBtn, dupCleanupActionBtn].forEach(btn => {
+        if (!btn) return;
+        btn.disabled = loading;
+        if (loading) {
+            btn.dataset.originalText = btn.textContent;
+            btn.innerHTML = spinner + text;
+        } else {
+            btn.innerHTML = btn.dataset.originalText || (t('duplicates.oneClickCleanup') || '一键清理');
+            delete btn.dataset.originalText;
+        }
+    });
+}
+
 async function startCleanup(buttonEl) {
     const msg = t('duplicates.cleanupConfirm') || '确定一键清理重复照片吗？每组将只保留精度最高的一张，其余全部移到回收站。';
     if (!confirm(msg)) return;
-    
-    buttonEl.disabled = true;
-    const originalText = buttonEl.textContent;
-    buttonEl.textContent = t('duplicates.cleaning') || '清理中...';
-    
+
+    // If triggered from view-header button, show duplicates-bar and scroll to top
+    if (buttonEl.id === 'dup-cleanup-action-btn') {
+        const dupBar = document.getElementById('duplicates-bar');
+        if (dupBar) {
+            dupBar.classList.remove('hidden');
+            dupBar.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+    }
+
+    _setCleanupButtonsLoading(true);
+    showToast(t('duplicates.cleanupStarted') || '清理已开始');
+
     try {
         const res = await fetch('/api/duplicates/cleanup', { method: 'POST' });
         const data = await res.json();
-        
+
         if (data.success) {
             // 启动轮询
             if (cleanupPollInterval) clearInterval(cleanupPollInterval);
             cleanupPollInterval = setInterval(pollCleanupStatus, 500);
         } else {
             showToast(data.message || '清理失败');
-            buttonEl.disabled = false;
-            buttonEl.textContent = originalText;
+            _setCleanupButtonsLoading(false);
         }
     } catch (e) {
         console.error('一键清理失败:', e);
         showToast('清理请求失败');
-        buttonEl.disabled = false;
-        buttonEl.textContent = originalText;
+        _setCleanupButtonsLoading(false);
     }
 }
 

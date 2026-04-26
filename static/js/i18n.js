@@ -390,6 +390,7 @@ const I18N = {
         'duplicates.cleanupConfirm': '确定一键清理重复照片吗？每组将只保留精度最高的一张，其余全部移到回收站。此操作不可撤销！',
         'duplicates.cleaning': '清理中...',
         'duplicates.deleted': '已删除 {0} 张',
+        'duplicates.cleanupStarted': '清理已开始',
         'duplicates.cleanupComplete': '清理完成',
 
         // Photo Filter
@@ -794,6 +795,7 @@ const I18N = {
         'duplicates.cleanupConfirm': 'Are you sure you want to clean up all duplicates? Only the highest-resolution copy in each group will be kept, and the rest will be moved to trash. This action cannot be undone!',
         'duplicates.cleaning': 'Cleaning...',
         'duplicates.deleted': 'Deleted {0}',
+        'duplicates.cleanupStarted': 'Cleanup started',
         'duplicates.cleanupComplete': 'Cleanup complete',
 
         // Photo Filter
@@ -1187,6 +1189,7 @@ const I18N = {
         'duplicates.cleanupConfirm': '重複写真を一括クリーンアップしますか？各グループで最も高解像度の1枚のみを保持し、残りはゴミ箱に移動します。この操作は元に戻せません！',
         'duplicates.cleaning': 'クリーンアップ中...',
         'duplicates.deleted': '削除済み {0} 枚',
+        'duplicates.cleanupStarted': 'クリーンアップを開始しました',
         'duplicates.cleanupComplete': 'クリーンアップ完了',
 
         // Photo Filter
